@@ -178,7 +178,8 @@ func TestCompleteReportsStatus(t *testing.T) {
 	_, err := p.Complete(context.Background(), llm.Request{Model: "m"})
 
 	var status *llm.StatusError
-	if !errors.As(err, &status) || status.Status != 429 || status.Message != "quota" || status.RetryAfter != 3*time.Second {
+	if !errors.As(err, &status) || status.Status != 429 || status.Message != "quota" ||
+		status.RetryAfter != 3*time.Second {
 		t.Errorf("ошибка %v", err)
 	}
 }
