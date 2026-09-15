@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -77,17 +76,28 @@ type response struct {
 	EvalCount       *int   `json:"eval_count"`
 }
 
+// usage — расход из конверта: отсутствующий или отрицательный счётчик делает расход неполным.
 func (r response) usage() llm.Usage {
-	u := llm.Usage{Known: r.PromptEvalCount != nil && r.EvalCount != nil}
-	if r.PromptEvalCount != nil {
-		u.InputTokens = *r.PromptEvalCount
-	}
-
-	if r.EvalCount != nil {
-		u.OutputTokens = *r.EvalCount
-	}
+	u := llm.Usage{Known: true}
+	u.InputTokens, u.Known = counter(r.PromptEvalCount, u.Known)
+	u.OutputTokens, u.Known = counter(r.EvalCount, u.Known)
 
 	return u
+}
+
+func counter(v *int, known bool) (int, bool) {
+	if v == nil || *v < 0 {
+		return 0, false
+	}
+
+	return *v, known
+}
+
+// reject — отказ по негодному содержимому с метаданными конверта: модель и время были.
+func (r response) reject(msg string) error {
+	return &llm.ResponseError{
+		Message: msg, Usage: r.usage(), Model: r.Model, ServerLatency: time.Duration(r.TotalDuration),
+	}
 }
 
 // Complete — одна попытка; срок ставит вызывающий контекстом.
@@ -130,18 +140,13 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (llm.Result, e
 		return llm.Result{}, &llm.ResponseError{Message: "ответ " + url, Err: err}
 	}
 
-	if msg := strings.TrimSpace(env.Error); msg != "" {
-		return llm.Result{}, &llm.ResponseError{Message: "ответ маршрута: " + msg, Usage: env.usage()}
-	}
-
 	switch {
+	case strings.TrimSpace(env.Error) != "":
+		return llm.Result{}, env.reject("ответ маршрута: " + strings.TrimSpace(env.Error))
 	case !env.Done:
-		return llm.Result{}, &llm.ResponseError{Message: "генерация не завершена (done=false)", Usage: env.usage()}
+		return llm.Result{}, env.reject("генерация не завершена (done=false)")
 	case strings.TrimSpace(env.Message.Content) == "":
-		return llm.Result{}, &llm.ResponseError{
-			Message: "пустой ответ маршрута (HTTP 200 без содержимого)",
-			Usage:   env.usage(),
-		}
+		return llm.Result{}, env.reject("пустой ответ маршрута (HTTP 200 без содержимого)")
 	}
 
 	return llm.Result{
@@ -153,8 +158,8 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (llm.Result, e
 	}, nil
 }
 
-// decode читает ровно один конверт: тело длиннее предела и хвост после первого
-// объекта — отказ, иначе первый фрагмент потока прошёл бы за весь ответ.
+// decode читает ровно один конверт: тело длиннее предела и любой хвост после
+// объекта — отказ (Unmarshal, не Decoder), иначе первый фрагмент потока прошёл бы за ответ.
 func decode(r io.Reader) (response, error) {
 	raw, err := io.ReadAll(io.LimitReader(r, maxBody+1))
 	if err != nil {
@@ -165,15 +170,9 @@ func decode(r io.Reader) (response, error) {
 		return response{}, fmt.Errorf("тело длиннее %d байт", maxBody)
 	}
 
-	dec := json.NewDecoder(bytes.NewReader(raw))
-
 	var env response
-	if err = dec.Decode(&env); err != nil {
-		return response{}, err
-	}
-
-	if dec.More() {
-		return response{}, errors.New("после конверта есть ещё данные — похоже на поток")
+	if err = json.Unmarshal(raw, &env); err != nil {
+		return response{}, fmt.Errorf("конверт: %w", err)
 	}
 
 	return env, nil

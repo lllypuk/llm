@@ -84,13 +84,12 @@ type Usage struct {
 	Known        bool
 }
 
-// Add складывает расход; неполнота любой части делает сумму неполной.
+// Add складывает расход; неполнота любой части и переполнение делают сумму неполной.
 func (u Usage) Add(part Usage) Usage {
-	return Usage{
-		InputTokens:  saturate(u.InputTokens, part.InputTokens),
-		OutputTokens: saturate(u.OutputTokens, part.OutputTokens),
-		Known:        u.Known && part.Known,
-	}
+	in, okIn := saturate(u.InputTokens, part.InputTokens)
+	out, okOut := saturate(u.OutputTokens, part.OutputTokens)
+
+	return Usage{InputTokens: in, OutputTokens: out, Known: u.Known && part.Known && okIn && okOut}
 }
 
 // Result — ответ модели. Usage и ServerLatency — удавшейся попытки; расход всех

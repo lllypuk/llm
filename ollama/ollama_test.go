@@ -172,6 +172,19 @@ func TestCompleteRejectsRouteFailures(t *testing.T) {
 	}
 }
 
+// TestCompleteAllowsTrailingWhitespace — перевод строки после конверта — не хвост.
+func TestCompleteAllowsTrailingWhitespace(t *testing.T) {
+	t.Parallel()
+
+	p := server(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"done":true,"message":{"content":"ok"}}` + "\n\n"))
+	})
+
+	if _, err := p.Complete(context.Background(), llm.Request{Model: "m"}); err != nil {
+		t.Error(err)
+	}
+}
+
 // TestCompleteReportsStatus — не-200 едет StatusError с текстом конверта и Retry-After.
 func TestCompleteReportsStatus(t *testing.T) {
 	t.Parallel()
@@ -233,7 +246,8 @@ func TestCompleteUsageKnownOnlyWithCounters(t *testing.T) {
 
 	p = server(t, func(w http.ResponseWriter, _ *http.Request) {
 		reply(w, map[string]any{
-			"done": true, "message": map[string]any{"content": ""}, "prompt_eval_count": 12, "eval_count": 7,
+			"done": true, "model": "m:latest", "total_duration": int64(2_000_000_000),
+			"message": map[string]any{"content": ""}, "prompt_eval_count": 12, "eval_count": 7,
 		})
 	})
 
@@ -242,6 +256,21 @@ func TestCompleteUsageKnownOnlyWithCounters(t *testing.T) {
 	var response *llm.ResponseError
 	if !errors.As(err, &response) || response.Usage.InputTokens != 12 || !response.Usage.Known {
 		t.Errorf("расход при пустом содержимом потерян: %v", err)
+	}
+
+	if response.Model != "m:latest" || response.ServerLatency != 2*time.Second {
+		t.Errorf("метаданные конверта потеряны: %+v", response)
+	}
+
+	p = server(t, func(w http.ResponseWriter, _ *http.Request) {
+		reply(w, map[string]any{
+			"done": true, "message": map[string]any{"content": "ok"}, "prompt_eval_count": -1, "eval_count": 7,
+		})
+	})
+
+	res, err = p.Complete(context.Background(), llm.Request{Model: "m"})
+	if err != nil || res.Usage.Known || res.Usage.InputTokens != 0 || res.Usage.OutputTokens != 7 {
+		t.Errorf("отрицательный счётчик: %+v, %v", res.Usage, err)
 	}
 }
 

@@ -50,9 +50,11 @@ func (e *StatusError) Error() string {
 // под кодом 200, битый или незаконченный конверт, пустое содержимое. Причина
 // сохраняется: просрочка при чтении тела обязана остаться просрочкой.
 type ResponseError struct {
-	Message string
-	Usage   Usage
-	Err     error
+	Message       string
+	Usage         Usage
+	Model         string
+	ServerLatency time.Duration
+	Err           error
 }
 
 func (e *ResponseError) Error() string {
@@ -206,14 +208,14 @@ func phaseOf(err error) Phase {
 	return PhaseInference
 }
 
-// usageOf — расход попытки, кончившейся отказом: конверт с содержимым, негодным для ответа.
-func usageOf(err error) Usage {
+// metaOf — метаданные попытки, кончившейся отказом: конверт был, содержимое негодно.
+func metaOf(err error) (Usage, string, time.Duration) {
 	var response *ResponseError
 	if errors.As(err, &response) {
-		return response.Usage
+		return response.Usage, response.Model, response.ServerLatency
 	}
 
-	return Usage{}
+	return Usage{}, "", 0
 }
 
 // errProviderMissing — клиент собран без плеча.

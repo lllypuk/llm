@@ -389,10 +389,64 @@ func TestChatRejectsBadRequestBeforeProvider(t *testing.T) {
 		{Model: ""},
 		{Model: "m", Output: llm.Output{Mode: "xml"}},
 	} {
-		_, err := client(f, nil).Chat(context.Background(), r)
-		if callError(t, err).Class != llm.RetryNever || f.count() != 0 {
+		obs := &recorder{}
+
+		_, err := client(f, obs).Chat(context.Background(), r)
+
+		call := callError(t, err)
+		if call.Class != llm.RetryNever || f.count() != 0 {
 			t.Errorf("запрос %+v: %v, вызовов плеча %d", r, err, f.count())
 		}
+
+		if rep := call.Report; rep.Outcome != llm.OutcomeBadRequest || rep.Attempts != 0 || !rep.Usage.Known ||
+			rep.RequestedModel != r.Model || len(obs.calls) != 1 || len(obs.attempts) != 0 {
+			t.Errorf("отчёт раннего отказа %+v, вызовов %d, попыток %d", rep, len(obs.calls), len(obs.attempts))
+		}
+	}
+}
+
+// TestChatLongRetryAfterOnLastAttempt — с единственной попыткой 503 и часовая просьба:
+// after_delay, а не immediate; терминальный 4xx с тем же заголовком остаётся never.
+func TestChatLongRetryAfterOnLastAttempt(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		code int
+		want llm.RetryClass
+	}{{503, llm.RetryAfterDelay}, {400, llm.RetryNever}, {404, llm.RetryNeedsConfiguration}} {
+		f := &fake{steps: []step{status(tc.code, time.Hour)}}
+		c := client(f, nil)
+		c.Attempts = 1
+		c.MaxRetryAfter = time.Millisecond
+
+		_, err := c.Chat(context.Background(), req())
+		if got := callError(t, err).Class; got != tc.want {
+			t.Errorf("%d: класс %s, ожидался %s", tc.code, got, tc.want)
+		}
+	}
+}
+
+// TestReportKeepsReportedModel — в отчёте модель из ответа как есть, подстановка только в Result;
+// у отказа — модель последнего конверта.
+func TestReportKeepsReportedModel(t *testing.T) {
+	t.Parallel()
+
+	f := &fake{steps: []step{ok("x", 1, 1)}}
+
+	res, err := client(f, nil).Chat(context.Background(), req())
+	if err != nil || res.Model != "m" || res.Report.Model != "" {
+		t.Errorf("результат %+v", res)
+	}
+
+	rejected := step{err: &llm.ResponseError{Message: "пусто", Model: "m:latest", ServerLatency: time.Second}}
+	f = &fake{steps: []step{rejected, status(500, 0)}}
+	obs := &recorder{}
+	c := client(f, obs)
+	c.Attempts = 2
+
+	_, err = c.Chat(context.Background(), req())
+	if callError(t, err).Report.Model != "m:latest" || obs.attempts[0].ServerLatency != time.Second {
+		t.Errorf("метаданные отказа потеряны: %v, %+v", err, obs.attempts[0])
 	}
 }
 
@@ -414,9 +468,19 @@ func TestChatLongRetryAfterOnAnyStatus(t *testing.T) {
 func TestUsageAdd(t *testing.T) {
 	t.Parallel()
 
-	sum := llm.Usage{Known: true}.Add(llm.Usage{InputTokens: 3, Known: true}).Add(llm.Usage{InputTokens: 4})
+	sum := (llm.Usage{Known: true}).Add(llm.Usage{InputTokens: 3, Known: true}).Add(llm.Usage{InputTokens: 4})
 	if sum.InputTokens != 7 || sum.Known {
 		t.Errorf("сумма %+v", sum)
+	}
+
+	big := llm.Usage{InputTokens: 1<<62 + 1<<61, Known: true}
+	if over := big.Add(big); over.Known || over.InputTokens <= 0 {
+		t.Errorf("переполнение %+v", over)
+	}
+
+	neg := (llm.Usage{Known: true}).Add(llm.Usage{InputTokens: -1, Known: true})
+	if neg.Known || neg.InputTokens != 0 {
+		t.Errorf("отрицательное %+v", neg)
 	}
 }
 
@@ -425,10 +489,18 @@ func TestArithmeticSaturates(t *testing.T) {
 	t.Parallel()
 
 	h := http.Header{}
-	h.Set("Retry-After", "9223372037")
 
-	if got := llm.RetryAfter(h); got < time.Hour {
-		t.Errorf("Retry-After переполнился: %s", got)
+	for _, raw := range []string{"9223372037", "9223372036854775808", "99999999999999999999999"} {
+		h.Set("Retry-After", raw)
+
+		if got := llm.RetryAfter(h); got < time.Hour {
+			t.Errorf("Retry-After %s переполнился: %s", raw, got)
+		}
+	}
+
+	h.Set("Retry-After", "-9223372036854775808")
+	if got := llm.RetryAfter(h); got != 0 {
+		t.Errorf("отрицательное переполнение: %s", got)
 	}
 
 	c := llm.New(&fake{}, 1<<62)

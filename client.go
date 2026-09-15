@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -72,27 +73,34 @@ func (c *Client) Budget() time.Duration {
 // Chat вызывает модель, повторяя отказы классов [RetryImmediate] и [RetryAfterDelay]
 // в пределах числа попыток и потолка ожидания. Негодный запрос отбивается до плеча.
 func (c *Client) Chat(ctx context.Context, req Request) (Result, error) {
+	run := &call{client: c, req: req, started: time.Now(), spent: Usage{Known: true}}
+
 	if c.Provider == nil {
-		return Result{}, &CallError{Model: req.Model, Class: RetryNever, Err: errProviderMissing}
+		return Result{}, run.fail(&CallError{Model: req.Model, Class: RetryNever, Err: errProviderMissing})
 	}
+
+	run.provider = c.Provider.Name()
 
 	if err := req.Validate(); err != nil {
-		return Result{}, &CallError{
-			Provider: c.Provider.Name(), Model: req.Model, Class: RetryNever, Message: err.Error(), Err: err,
-		}
-	}
+		run.outcome = OutcomeBadRequest
 
-	run := &call{client: c, req: req, started: time.Now(), spent: Usage{Known: true}}
+		return Result{}, run.fail(&CallError{
+			Provider: run.provider, Model: req.Model, Class: RetryNever, Message: err.Error(), Err: err,
+		})
+	}
 
 	return run.do(ctx)
 }
 
-// call — состояние одного вызова: расход по попыткам и отчёт.
+// call — состояние одного вызова: расход по попыткам, модель из последнего конверта, отчёт.
 type call struct {
-	client  *Client
-	req     Request
-	started time.Time
-	spent   Usage
+	client   *Client
+	provider string
+	req      Request
+	started  time.Time
+	spent    Usage
+	model    string
+	outcome  string
 }
 
 func (r *call) do(ctx context.Context) (Result, error) {
@@ -101,22 +109,30 @@ func (r *call) do(ctx context.Context) (Result, error) {
 
 	for attempt := 1; ; attempt++ {
 		res, err := c.once(ctx, r.req)
-		r.spent = r.spent.Add(usageOfAttempt(res, err))
-		r.observeAttempt(ctx, attempt, res, err)
+		usage, model, server := attemptMeta(res, err)
+		r.spent = r.spent.Add(usage)
+
+		if model != "" {
+			r.model = model
+		}
+
+		r.observeAttempt(ctx, attempt, res, err, usage, model, server)
 
 		if err == nil {
 			return r.succeed(attempt, res), nil
 		}
 
-		fail := classify(c.Provider.Name(), r.req.Model, attempt, err)
+		fail := classify(r.provider, r.req.Model, attempt, err)
 
-		switch {
-		case fail.Class == RetryNever, fail.Class == RetryNeedsConfiguration, attempt == attempts:
-			return Result{}, r.fail(fail)
-		case fail.RetryAfter > c.maxRetryAfter():
-			// Просьба дольше потолка — «сегодня не обслужим»: слот не держим, срок и класс отдаём наверх.
+		// Просьба дольше потолка — «сегодня не обслужим»: класс меняется до проверки числа попыток,
+		// иначе на последней очередь получила бы immediate и повторила раньше разрешённого.
+		tooLong := fail.RetryAfter > c.maxRetryAfter() && fail.Class != RetryNever &&
+			fail.Class != RetryNeedsConfiguration
+		if tooLong {
 			fail.Class = RetryAfterDelay
+		}
 
+		if fail.Class == RetryNever || fail.Class == RetryNeedsConfiguration || tooLong || attempt == attempts {
 			return Result{}, r.fail(fail)
 		}
 
@@ -128,12 +144,12 @@ func (r *call) do(ctx context.Context) (Result, error) {
 	}
 }
 
-func (r *call) report(outcome string, class RetryClass, attempts int, model string) CallReport {
+func (r *call) report(outcome string, class RetryClass, attempts int) CallReport {
 	return CallReport{
 		CallID:         r.req.CallID,
-		Provider:       r.client.Provider.Name(),
+		Provider:       r.provider,
 		RequestedModel: r.req.Model,
-		Model:          model,
+		Model:          r.model,
 		Task:           r.req.Task,
 		Outcome:        outcome,
 		Class:          class,
@@ -143,36 +159,44 @@ func (r *call) report(outcome string, class RetryClass, attempts int, model stri
 	}
 }
 
-func (r *call) observeAttempt(ctx context.Context, attempt int, res Result, err error) {
+func (r *call) observeAttempt(
+	ctx context.Context, attempt int, res Result, err error, usage Usage, model string, server time.Duration,
+) {
 	r.client.observer().Attempt(AttemptReport{
 		CallID:         r.req.CallID,
 		Attempt:        attempt,
-		Provider:       r.client.Provider.Name(),
+		Provider:       r.provider,
 		RequestedModel: r.req.Model,
-		Model:          res.Model,
+		Model:          model,
 		Task:           r.req.Task,
 		Outcome:        attemptOutcome(ctx, err),
 		Phase:          phaseOf(err),
 		Duration:       res.Latency,
-		ServerLatency:  res.ServerLatency,
-		Usage:          usageOfAttempt(res, err),
+		ServerLatency:  server,
+		Usage:          usage,
 	})
 }
 
+// succeed — отчёт несёт модель из ответа как есть; подстановка запрошенной — только в Result.
 func (r *call) succeed(attempt int, res Result) Result {
+	res.Report = r.report(OutcomeOK, "", attempt)
+	res.Latency = res.Report.Duration
+	r.client.observer().Call(res.Report)
+
 	if res.Model == "" {
 		res.Model = r.req.Model
 	}
-
-	res.Report = r.report(OutcomeOK, "", attempt, res.Model)
-	res.Latency = res.Report.Duration
-	r.client.observer().Call(res.Report)
 
 	return res
 }
 
 func (r *call) fail(fail *CallError) *CallError {
-	fail.Report = r.report(OutcomeError, fail.Class, fail.Attempts, "")
+	outcome := OutcomeError
+	if r.outcome != "" {
+		outcome = r.outcome
+	}
+
+	fail.Report = r.report(outcome, fail.Class, fail.Attempts)
 	fail.Latency = fail.Report.Duration
 	r.client.observer().Call(fail.Report)
 
@@ -191,12 +215,13 @@ func (c *Client) once(ctx context.Context, req Request) (Result, error) {
 	return res, err
 }
 
-func usageOfAttempt(res Result, err error) Usage {
+// attemptMeta — расход, модель и серверное время попытки: у отказа — из конверта, если он был.
+func attemptMeta(res Result, err error) (Usage, string, time.Duration) {
 	if err != nil {
-		return usageOf(err)
+		return metaOf(err)
 	}
 
-	return res.Usage
+	return res.Usage, res.Model, res.ServerLatency
 }
 
 func (c *Client) observer() Observer {
@@ -273,12 +298,17 @@ func RetryAfter(h http.Header) time.Duration {
 		return 0
 	}
 
-	if secs, err := strconv.ParseInt(raw, 10, 64); err == nil {
+	secs, err := strconv.ParseInt(raw, 10, 64)
+
+	switch {
+	case err == nil:
 		return mulDuration(time.Second, clampInt(secs))
+	case errors.Is(err, strconv.ErrRange) && !strings.HasPrefix(raw, "-"):
+		return math.MaxInt64
 	}
 
-	at, err := http.ParseTime(raw)
-	if err != nil {
+	at, dateErr := http.ParseTime(raw)
+	if dateErr != nil {
 		return 0
 	}
 
@@ -340,12 +370,15 @@ func clampInt(v int64) int {
 	}
 }
 
-// saturate — сумма счётчиков без переполнения; отрицательные считаются нулём.
-func saturate(a, b int) int {
-	a, b = max(a, 0), max(b, 0)
-	if b > math.MaxInt-a {
-		return math.MaxInt
+// saturate — сумма счётчиков; переполнение и отрицательные слагаемые делают её неточной.
+func saturate(a, b int) (int, bool) {
+	if a < 0 || b < 0 {
+		return max(a, 0) + max(b, 0), false
 	}
 
-	return a + b
+	if b > math.MaxInt-a {
+		return math.MaxInt, false
+	}
+
+	return a + b, true
 }
