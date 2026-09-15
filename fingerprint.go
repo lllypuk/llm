@@ -2,15 +2,24 @@ package llm
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
-	"strings"
 )
 
-// Fingerprint — короткий отпечаток набора строк, из которых складывается идентичность
-// вызова: плечо, модель, ревизия, хеш промпта, схема, опции, подготовка входа.
-// Считается до вызова — по нему дедупятся прогоны; порядок частей значим.
-func Fingerprint(parts ...string) string {
-	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+// fingerprintVersion — версия кодирования: смена меняет все отпечатки, старые не пересчитываются.
+const fingerprintVersion = 1
 
-	return hex.EncodeToString(sum[:8])
+// Fingerprint — отпечаток набора строк, из которых складывается идентичность
+// вызова: плечо, модель, ревизия, хеш промпта, схема, опции, подготовка входа.
+// Части кодируются длиной, поэтому границы однозначны; порядок значим. 128 бит hex.
+func Fingerprint(parts ...string) string {
+	h := sha256.New()
+	_ = binary.Write(h, binary.BigEndian, uint16(fingerprintVersion))
+
+	for _, part := range parts {
+		_ = binary.Write(h, binary.BigEndian, uint64(len(part)))
+		_, _ = h.Write([]byte(part))
+	}
+
+	return hex.EncodeToString(h.Sum(nil)[:16])
 }

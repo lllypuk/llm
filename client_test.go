@@ -87,7 +87,12 @@ func client(f *fake, obs llm.Observer) *llm.Client {
 }
 
 func req() llm.Request {
-	return llm.Request{Task: "test", Model: "m", Messages: []llm.Message{{Role: llm.RoleUser, Text: "hi"}}}
+	return llm.Request{
+		CallID:   "c1",
+		Task:     "test",
+		Model:    "m",
+		Messages: []llm.Message{{Role: llm.RoleUser, Text: "hi"}},
+	}
 }
 
 func callError(t *testing.T, err error) *llm.CallError {
@@ -114,12 +119,16 @@ func TestChatRetriesImmediateAndSucceeds(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if res.Text != "done" || res.Attempts != 3 || res.Model != "m" || res.Latency <= 0 {
+	if res.Text != "done" || res.Report.Attempts != 3 || res.Model != "m" || res.Latency <= 0 {
 		t.Errorf("результат %+v", res)
 	}
 
 	if len(obs.attempts) != 3 || len(obs.calls) != 1 {
 		t.Fatalf("попыток %d, вызовов %d", len(obs.attempts), len(obs.calls))
+	}
+
+	if obs.attempts[1].Attempt != 2 || obs.attempts[1].CallID != "c1" || res.Report.CallID != "c1" {
+		t.Errorf("корреляция: попытка %+v, отчёт %+v", obs.attempts[1], res.Report)
 	}
 
 	if obs.attempts[0].Outcome != llm.OutcomeHTTP5xx || obs.attempts[2].Outcome != llm.OutcomeOK {
@@ -180,8 +189,8 @@ func TestChatWaitsRetryAfter(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if res.Attempts != 2 || time.Since(started) < 40*time.Millisecond {
-		t.Errorf("попыток %d за %s", res.Attempts, time.Since(started))
+	if res.Report.Attempts != 2 || time.Since(started) < 40*time.Millisecond {
+		t.Errorf("попыток %d за %s", res.Report.Attempts, time.Since(started))
 	}
 }
 
@@ -326,11 +335,116 @@ func TestFingerprint(t *testing.T) {
 	t.Parallel()
 
 	a, b := llm.Fingerprint("ollama", "m", "p1"), llm.Fingerprint("ollama", "m", "p1")
-	if a != b || len(a) != 16 {
+	if a != b || len(a) != 32 {
 		t.Errorf("отпечатки %q и %q", a, b)
 	}
 
 	if llm.Fingerprint("a", "b") == llm.Fingerprint("b", "a") || llm.Fingerprint("ab") == llm.Fingerprint("a", "b") {
 		t.Error("отпечаток не различает порядок и границы частей")
+	}
+
+	if llm.Fingerprint("a\x00b", "c") == llm.Fingerprint("a", "b\x00c") {
+		t.Error("разделитель внутри части смешивает наборы")
+	}
+}
+
+// TestChatFailureCarriesReport — окончательный отказ несёт отчёт с расходом всех попыток,
+// а удача — расход попыток в Report и расход удавшейся в Usage.
+func TestChatFailureCarriesReport(t *testing.T) {
+	t.Parallel()
+
+	spent := step{err: &llm.ResponseError{Message: "пусто", Usage: llm.Usage{InputTokens: 7, Known: true}}}
+	f := &fake{steps: []step{spent, status(500, 0)}}
+	c := client(f, nil)
+	c.Attempts = 2
+
+	_, err := c.Chat(context.Background(), req())
+
+	call := callError(t, err)
+	if call.Report.Usage.InputTokens != 7 || call.Report.Attempts != 2 || call.Report.CallID != "c1" {
+		t.Errorf("отчёт отказа %+v", call.Report)
+	}
+
+	f = &fake{steps: []step{spent, ok("late", 11, 1)}}
+
+	res, err := client(f, nil).Chat(context.Background(), req())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if res.Usage.InputTokens != 11 || res.Report.Usage.InputTokens != 18 || !res.Report.Usage.Known {
+		t.Errorf("расход %+v, отчёт %+v", res.Usage, res.Report.Usage)
+	}
+}
+
+// TestChatRejectsBadRequestBeforeProvider — схема без схемы и пустая модель: плечо не зовётся,
+// класс never, исход вызова error.
+func TestChatRejectsBadRequestBeforeProvider(t *testing.T) {
+	t.Parallel()
+
+	f := &fake{steps: []step{ok("never", 0, 0)}}
+
+	for _, r := range []llm.Request{
+		{Model: "m", Output: llm.Output{Mode: llm.ModeSchema}},
+		{Model: ""},
+		{Model: "m", Output: llm.Output{Mode: "xml"}},
+	} {
+		_, err := client(f, nil).Chat(context.Background(), r)
+		if callError(t, err).Class != llm.RetryNever || f.count() != 0 {
+			t.Errorf("запрос %+v: %v, вызовов плеча %d", r, err, f.count())
+		}
+	}
+}
+
+// TestChatLongRetryAfterOnAnyStatus — 503 с часовой просьбой: класс after_delay, а не immediate.
+func TestChatLongRetryAfterOnAnyStatus(t *testing.T) {
+	t.Parallel()
+
+	f := &fake{steps: []step{status(503, time.Hour)}}
+	c := client(f, nil)
+	c.MaxRetryAfter = time.Millisecond
+
+	_, err := c.Chat(context.Background(), req())
+	if call := callError(t, err); call.Class != llm.RetryAfterDelay || f.count() != 1 {
+		t.Errorf("ошибка %+v, попыток %d", call, f.count())
+	}
+}
+
+// TestUsageAdd — неполная часть делает сумму неполной, но счётчики не теряются.
+func TestUsageAdd(t *testing.T) {
+	t.Parallel()
+
+	sum := llm.Usage{Known: true}.Add(llm.Usage{InputTokens: 3, Known: true}).Add(llm.Usage{InputTokens: 4})
+	if sum.InputTokens != 7 || sum.Known {
+		t.Errorf("сумма %+v", sum)
+	}
+}
+
+// TestArithmeticSaturates — чрезмерный Retry-After, бюджет и сдвиг паузы не переполняются.
+func TestArithmeticSaturates(t *testing.T) {
+	t.Parallel()
+
+	h := http.Header{}
+	h.Set("Retry-After", "9223372037")
+
+	if got := llm.RetryAfter(h); got < time.Hour {
+		t.Errorf("Retry-After переполнился: %s", got)
+	}
+
+	c := llm.New(&fake{}, 1<<62)
+	c.Attempts = 3
+
+	if got := c.Budget(); got <= 0 {
+		t.Errorf("бюджет переполнился: %s", got)
+	}
+
+	c = llm.New(&fake{}, time.Second)
+	c.Attempts = 40
+	c.Pause = (1 << 32) + 1
+	c.MaxPause = time.Minute
+	c.MaxRetryAfter = time.Millisecond
+
+	if got := c.Budget(); got > 40*time.Second+39*time.Minute || got < 40*time.Second+30*time.Minute {
+		t.Errorf("бюджет с большой паузой %s", got)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,7 +23,7 @@ const (
 	// maxErrorBody — сколько байт тела читаем у не-200: сообщение укладывается в строку.
 	maxErrorBody = 8 << 10
 	// maxBody — предел тела под кодом 200: демон или прокси произвольные, а текст уезжает дальше
-	// без границы. Обрезанное тело не разберётся и уедет отказом попытки, а не молча.
+	// без границы. Тело длиннее — отказ попытки, а не молча обрезанный ответ.
 	maxBody = 512 << 10
 )
 
@@ -61,6 +62,7 @@ type request struct {
 	Options  *options        `json:"options,omitempty"`
 }
 
+// response — конверт `/api/chat`. Счётчики указателями: отсутствующий отличается от нуля.
 type response struct {
 	Model   string `json:"model"`
 	Message struct {
@@ -68,24 +70,42 @@ type response struct {
 	} `json:"message"`
 	// Error — `{"error": "..."}` под кодом 200: так отвечают и демон, и прокси перед ним.
 	Error           string `json:"error"`
+	Done            bool   `json:"done"`
 	DoneReason      string `json:"done_reason"`
 	TotalDuration   int64  `json:"total_duration"`
-	PromptEvalCount int    `json:"prompt_eval_count"`
-	EvalCount       int    `json:"eval_count"`
+	PromptEvalCount *int   `json:"prompt_eval_count"`
+	EvalCount       *int   `json:"eval_count"`
+}
+
+func (r response) usage() llm.Usage {
+	u := llm.Usage{Known: r.PromptEvalCount != nil && r.EvalCount != nil}
+	if r.PromptEvalCount != nil {
+		u.InputTokens = *r.PromptEvalCount
+	}
+
+	if r.EvalCount != nil {
+		u.OutputTokens = *r.EvalCount
+	}
+
+	return u
 }
 
 // Complete — одна попытка; срок ставит вызывающий контекстом.
 func (p *Provider) Complete(ctx context.Context, req llm.Request) (llm.Result, error) {
+	if err := req.Validate(); err != nil {
+		return llm.Result{}, err
+	}
+
 	body, err := json.Marshal(p.encode(req))
 	if err != nil {
-		return llm.Result{}, &llm.ResponseError{Message: fmt.Sprintf("сборка запроса: %v", err)}
+		return llm.Result{}, &llm.RequestError{Message: "сборка запроса", Err: err}
 	}
 
 	url := p.Host + "/api/chat"
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return llm.Result{}, fmt.Errorf("запрос %s: %w", url, err)
+		return llm.Result{}, &llm.RequestError{Message: "запрос " + url, Err: err}
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -105,26 +125,58 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (llm.Result, e
 		}
 	}
 
-	var env response
-	if err = json.NewDecoder(io.LimitReader(resp.Body, maxBody)).Decode(&env); err != nil {
-		return llm.Result{}, &llm.ResponseError{Message: fmt.Sprintf("ответ %s: %v", url, err)}
+	env, err := decode(resp.Body)
+	if err != nil {
+		return llm.Result{}, &llm.ResponseError{Message: "ответ " + url, Err: err}
 	}
 
 	if msg := strings.TrimSpace(env.Error); msg != "" {
-		return llm.Result{}, &llm.ResponseError{Message: "ответ маршрута: " + msg}
+		return llm.Result{}, &llm.ResponseError{Message: "ответ маршрута: " + msg, Usage: env.usage()}
 	}
 
-	if strings.TrimSpace(env.Message.Content) == "" {
-		return llm.Result{}, &llm.ResponseError{Message: "пустой ответ маршрута (HTTP 200 без содержимого)"}
+	switch {
+	case !env.Done:
+		return llm.Result{}, &llm.ResponseError{Message: "генерация не завершена (done=false)", Usage: env.usage()}
+	case strings.TrimSpace(env.Message.Content) == "":
+		return llm.Result{}, &llm.ResponseError{
+			Message: "пустой ответ маршрута (HTTP 200 без содержимого)",
+			Usage:   env.usage(),
+		}
 	}
 
 	return llm.Result{
 		Model:         env.Model,
 		Text:          env.Message.Content,
 		FinishReason:  env.DoneReason,
-		Usage:         llm.Usage{InputTokens: env.PromptEvalCount, OutputTokens: env.EvalCount, Known: true},
+		Usage:         env.usage(),
 		ServerLatency: time.Duration(env.TotalDuration),
 	}, nil
+}
+
+// decode читает ровно один конверт: тело длиннее предела и хвост после первого
+// объекта — отказ, иначе первый фрагмент потока прошёл бы за весь ответ.
+func decode(r io.Reader) (response, error) {
+	raw, err := io.ReadAll(io.LimitReader(r, maxBody+1))
+	if err != nil {
+		return response{}, err
+	}
+
+	if len(raw) > maxBody {
+		return response{}, fmt.Errorf("тело длиннее %d байт", maxBody)
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(raw))
+
+	var env response
+	if err = dec.Decode(&env); err != nil {
+		return response{}, err
+	}
+
+	if dec.More() {
+		return response{}, errors.New("после конверта есть ещё данные — похоже на поток")
+	}
+
+	return env, nil
 }
 
 func (p *Provider) encode(req llm.Request) request {

@@ -38,8 +38,13 @@ func TestCompleteReadsEnvelope(t *testing.T) {
 		}
 
 		reply(w, map[string]any{
-			"model": "m:latest", "message": map[string]any{"role": "assistant", "content": `{"a":1}`},
-			"done_reason": "stop", "total_duration": int64(1_500_000_000), "prompt_eval_count": 12, "eval_count": 7,
+			"model":             "m:latest",
+			"message":           map[string]any{"role": "assistant", "content": `{"a":1}`},
+			"done":              true,
+			"done_reason":       "stop",
+			"total_duration":    int64(1_500_000_000),
+			"prompt_eval_count": 12,
+			"eval_count":        7,
 		})
 	})
 
@@ -66,7 +71,7 @@ func TestCompleteEncodesRequest(t *testing.T) {
 
 	p := server(t, func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&got)
-		reply(w, map[string]any{"message": map[string]any{"content": "ok"}})
+		reply(w, map[string]any{"done": true, "message": map[string]any{"content": "ok"}})
 	})
 
 	req := llm.Request{
@@ -124,7 +129,7 @@ func TestCompleteFormatByMode(t *testing.T) {
 
 		p := server(t, func(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewDecoder(r.Body).Decode(&got)
-			reply(w, map[string]any{"message": map[string]any{"content": "ok"}})
+			reply(w, map[string]any{"done": true, "message": map[string]any{"content": "ok"}})
 		})
 
 		req := llm.Request{Model: "m", Output: llm.Output{Mode: tc.mode}}
@@ -144,10 +149,12 @@ func TestCompleteRejectsRouteFailures(t *testing.T) {
 	t.Parallel()
 
 	bodies := map[string]string{
-		"error":  `{"error":"model not loaded"}`,
-		"empty":  `{"message":{"content":"   "}}`,
-		"broken": `{"message":`,
-		"huge":   `{"message":{"content":"` + strings.Repeat("x", 600<<10) + `"}}`,
+		"error":   `{"error":"model not loaded"}`,
+		"empty":   `{"done":true,"message":{"content":"   "}}`,
+		"broken":  `{"message":`,
+		"huge":    `{"done":true,"message":{"content":"` + strings.Repeat("x", 600<<10) + `"}}`,
+		"notdone": `{"done":false,"message":{"content":"part"}}`,
+		"stream":  `{"done":true,"message":{"content":"a"}}` + "\n" + `{"done":true,"message":{"content":"b"}}`,
 	}
 
 	for name, body := range bodies {
@@ -198,14 +205,62 @@ func TestClientOverOllama(t *testing.T) {
 			return
 		}
 
-		reply(w, map[string]any{"message": map[string]any{"content": "ok"}})
+		reply(w, map[string]any{"done": true, "message": map[string]any{"content": "ok"}})
 	})
 
 	c := llm.New(p, time.Second)
 	c.Pause = time.Millisecond
 
 	res, err := c.Chat(context.Background(), llm.Request{Model: "m"})
-	if err != nil || res.Attempts != 2 || res.Model != "m" {
+	if err != nil || res.Report.Attempts != 2 || res.Model != "m" {
 		t.Errorf("результат %+v, %v", res, err)
+	}
+}
+
+// TestCompleteUsageKnownOnlyWithCounters — без счётчиков расход неизвестен, с ними — известен
+// и при негодном содержимом уезжает в ResponseError.
+func TestCompleteUsageKnownOnlyWithCounters(t *testing.T) {
+	t.Parallel()
+
+	p := server(t, func(w http.ResponseWriter, _ *http.Request) {
+		reply(w, map[string]any{"done": true, "message": map[string]any{"content": "ok"}})
+	})
+
+	res, err := p.Complete(context.Background(), llm.Request{Model: "m"})
+	if err != nil || res.Usage.Known {
+		t.Errorf("без счётчиков: %+v, %v", res.Usage, err)
+	}
+
+	p = server(t, func(w http.ResponseWriter, _ *http.Request) {
+		reply(w, map[string]any{
+			"done": true, "message": map[string]any{"content": ""}, "prompt_eval_count": 12, "eval_count": 7,
+		})
+	})
+
+	_, err = p.Complete(context.Background(), llm.Request{Model: "m"})
+
+	var response *llm.ResponseError
+	if !errors.As(err, &response) || response.Usage.InputTokens != 12 || !response.Usage.Known {
+		t.Errorf("расход при пустом содержимом потерян: %v", err)
+	}
+}
+
+// TestCompleteKeepsDeadlineWhileReadingBody — просрочка при чтении тела остаётся просрочкой.
+func TestCompleteKeepsDeadlineWhileReadingBody(t *testing.T) {
+	t.Parallel()
+
+	p := server(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+
+	_, err := p.Complete(ctx, llm.Request{Model: "m"})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("причина потеряна: %v", err)
 	}
 }

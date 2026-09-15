@@ -47,14 +47,52 @@ func (e *StatusError) Error() string {
 }
 
 // ResponseError — поставщик ответил, но ответа модели в теле нет: отказ маршрута
-// под кодом 200, битый конверт, пустое содержимое.
+// под кодом 200, битый или незаконченный конверт, пустое содержимое. Причина
+// сохраняется: просрочка при чтении тела обязана остаться просрочкой.
 type ResponseError struct {
 	Message string
+	Usage   Usage
+	Err     error
 }
 
-func (e *ResponseError) Error() string { return e.Message }
+func (e *ResponseError) Error() string {
+	if e.Err != nil {
+		return e.Message + ": " + e.Err.Error()
+	}
 
-// CallError — отказ вызова целиком, с решением о повторе и потраченным временем.
+	return e.Message
+}
+
+func (e *ResponseError) Unwrap() error { return e.Err }
+
+// RequestError — запрос не собрать: поставщика не звали, повтор бессмыслен.
+type RequestError struct {
+	Message string
+	Err     error
+}
+
+func (e *RequestError) Error() string {
+	if e.Err != nil {
+		return e.Message + ": " + e.Err.Error()
+	}
+
+	return e.Message
+}
+
+func (e *RequestError) Unwrap() error { return e.Err }
+
+// PhaseError помечает фазой любую причину — сеть при OAuth, отказ загрузки кадра.
+type PhaseError struct {
+	Phase Phase
+	Err   error
+}
+
+func (e *PhaseError) Error() string { return string(e.Phase) + ": " + e.Err.Error() }
+
+func (e *PhaseError) Unwrap() error { return e.Err }
+
+// CallError — отказ вызова целиком, с решением о повторе, потраченным временем
+// и тем же отчётом, что получает наблюдатель.
 type CallError struct {
 	Provider   string
 	Model      string
@@ -65,6 +103,7 @@ type CallError struct {
 	RetryAfter time.Duration
 	Latency    time.Duration
 	Class      RetryClass
+	Report     CallReport
 	Err        error
 }
 
@@ -107,15 +146,23 @@ func Latency(err error) time.Duration {
 }
 
 // classify переводит отказ попытки в класс. 429 — после паузы; ключ, баланс и
-// отсутствующая модель — к оператору; прочие 4xx повторятся тем же ответом.
+// отсутствующая модель — к оператору; прочие 4xx и негодный запрос повторятся тем же.
 func classify(provider, model string, attempt int, err error) *CallError {
 	fail := &CallError{
 		Provider: provider,
 		Model:    model,
-		Phase:    PhaseInference,
+		Phase:    phaseOf(err),
 		Attempts: attempt,
 		Class:    RetryImmediate,
 		Err:      err,
+	}
+
+	var request *RequestError
+	if errors.As(err, &request) {
+		fail.Class = RetryNever
+		fail.Message = request.Message
+
+		return fail
 	}
 
 	var status *StatusError
@@ -126,10 +173,6 @@ func classify(provider, model string, attempt int, err error) *CallError {
 	fail.Status = status.Status
 	fail.Message = status.Message
 	fail.RetryAfter = status.RetryAfter
-
-	if status.Phase != "" {
-		fail.Phase = status.Phase
-	}
 
 	switch {
 	case status.Status == http.StatusTooManyRequests:
@@ -148,7 +191,30 @@ func classify(provider, model string, attempt int, err error) *CallError {
 	return fail
 }
 
+// phaseOf — фаза отказа: явная пометка [PhaseError] или [StatusError.Phase], иначе генерация.
+func phaseOf(err error) Phase {
+	var phased *PhaseError
+	if errors.As(err, &phased) && phased.Phase != "" {
+		return phased.Phase
+	}
+
+	var status *StatusError
+	if errors.As(err, &status) && status.Phase != "" {
+		return status.Phase
+	}
+
+	return PhaseInference
+}
+
+// usageOf — расход попытки, кончившейся отказом: конверт с содержимым, негодным для ответа.
+func usageOf(err error) Usage {
+	var response *ResponseError
+	if errors.As(err, &response) {
+		return response.Usage
+	}
+
+	return Usage{}
+}
+
 // errProviderMissing — клиент собран без плеча.
 var errProviderMissing = errors.New("плечо не задано")
-
-func errorsAs(err error, target any) bool { return errors.As(err, target) }

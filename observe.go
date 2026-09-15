@@ -15,34 +15,43 @@ const (
 	OutcomeHTTP4xx     = "http_4xx"
 	OutcomeHTTP5xx     = "http_5xx"
 	OutcomeBadResponse = "bad_response"
+	OutcomeBadRequest  = "bad_request"
 	OutcomeNetwork     = "network"
 	OutcomeError       = "error"
 )
 
-// AttemptReport — одна попытка: исход, фаза, длительность и расход, если он известен.
+// AttemptReport — одна попытка. Model — имя из ответа, когда поставщик его назвал.
 type AttemptReport struct {
-	Provider string
-	Model    string
-	Task     string
-	Outcome  string
-	Phase    Phase
-	Duration time.Duration
-	Usage    Usage
+	CallID         string
+	Attempt        int
+	Provider       string
+	RequestedModel string
+	Model          string
+	Task           string
+	Outcome        string
+	Phase          Phase
+	Duration       time.Duration
+	ServerLatency  time.Duration
+	Usage          Usage
 }
 
-// CallReport — вызов целиком: исход, число попыток, суммарный расход попыток.
+// CallReport — вызов целиком: исход, класс отказа, число попыток, расход всех попыток.
 type CallReport struct {
-	Provider string
-	Model    string
-	Task     string
-	Outcome  string
-	Class    RetryClass
-	Attempts int
-	Duration time.Duration
-	Usage    Usage
+	CallID         string
+	Provider       string
+	RequestedModel string
+	Model          string
+	Task           string
+	Outcome        string
+	Class          RetryClass
+	Attempts       int
+	Duration       time.Duration
+	Usage          Usage
 }
 
-// Observer — приёмник отчётов; реализует его потребитель (Prometheus, журнал).
+// Observer — приёмник отчётов: быстрый и потокобезопасный, зовётся синхронно
+// внутри вызова без контекста и без права на ошибку — счётчики, не журнал.
+// Запись в базу делает обёртка потребителя по [Result.Report] и [CallError.Report].
 type Observer interface {
 	Attempt(AttemptReport)
 	Call(CallReport)
@@ -60,11 +69,17 @@ func attemptOutcome(ctx context.Context, err error) string {
 
 	var response *ResponseError
 
+	var request *RequestError
+
 	switch {
+	case err == nil:
+		return OutcomeOK
 	case ctx.Err() != nil:
 		return OutcomeCancelled
 	case errors.Is(err, context.DeadlineExceeded):
 		return OutcomeTimeout
+	case errors.As(err, &request):
+		return OutcomeBadRequest
 	case errors.As(err, &status):
 		return statusOutcome(status.Status)
 	case errors.As(err, &response):
