@@ -154,6 +154,8 @@ func TestCompleteRejectsRouteFailures(t *testing.T) {
 		"broken":  `{"message":`,
 		"huge":    `{"done":true,"message":{"content":"` + strings.Repeat("x", 600<<10) + `"}}`,
 		"notdone": `{"done":false,"message":{"content":"part"}}`,
+		"bracket": `{"done":true,"message":{"content":"a"}}]`,
+		"brace":   `{"done":true,"message":{"content":"a"}}}`,
 		"stream":  `{"done":true,"message":{"content":"a"}}` + "\n" + `{"done":true,"message":{"content":"b"}}`,
 	}
 

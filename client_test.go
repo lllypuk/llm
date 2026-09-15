@@ -448,6 +448,13 @@ func TestReportKeepsReportedModel(t *testing.T) {
 	if callError(t, err).Report.Model != "m:latest" || obs.attempts[0].ServerLatency != time.Second {
 		t.Errorf("метаданные отказа потеряны: %v, %+v", err, obs.attempts[0])
 	}
+
+	f = &fake{steps: []step{rejected, ok("x", 1, 1)}}
+
+	res, err = client(f, nil).Chat(context.Background(), req())
+	if err != nil || res.Report.Model != "" || res.Model != "m" {
+		t.Errorf("успех без модели унаследовал имя отказа: %+v, %v", res.Report, err)
+	}
 }
 
 // TestChatLongRetryAfterOnAnyStatus — 503 с часовой просьбой: класс after_delay, а не immediate.

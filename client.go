@@ -144,12 +144,13 @@ func (r *call) do(ctx context.Context) (Result, error) {
 	}
 }
 
-func (r *call) report(outcome string, class RetryClass, attempts int) CallReport {
+// report — отчёт вызова; model — из удавшегося ответа как есть, у отказа — из последнего конверта.
+func (r *call) report(outcome string, class RetryClass, attempts int, model string) CallReport {
 	return CallReport{
 		CallID:         r.req.CallID,
 		Provider:       r.provider,
 		RequestedModel: r.req.Model,
-		Model:          r.model,
+		Model:          model,
 		Task:           r.req.Task,
 		Outcome:        outcome,
 		Class:          class,
@@ -179,7 +180,7 @@ func (r *call) observeAttempt(
 
 // succeed — отчёт несёт модель из ответа как есть; подстановка запрошенной — только в Result.
 func (r *call) succeed(attempt int, res Result) Result {
-	res.Report = r.report(OutcomeOK, "", attempt)
+	res.Report = r.report(OutcomeOK, "", attempt, res.Model)
 	res.Latency = res.Report.Duration
 	r.client.observer().Call(res.Report)
 
@@ -196,7 +197,7 @@ func (r *call) fail(fail *CallError) *CallError {
 		outcome = r.outcome
 	}
 
-	fail.Report = r.report(outcome, fail.Class, fail.Attempts)
+	fail.Report = r.report(outcome, fail.Class, fail.Attempts, r.model)
 	fail.Latency = fail.Report.Duration
 	r.client.observer().Call(fail.Report)
 
