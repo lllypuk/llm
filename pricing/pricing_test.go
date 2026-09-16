@@ -227,4 +227,18 @@ func TestEstimateCallCurrencyMismatchIsUnknown(t *testing.T) {
 	if got != (pricing.Cost{Status: "unknown"}) {
 		t.Fatalf("EstimateCall = %+v, want unknown: валюты не складываются", got)
 	}
+
+	got = pricing.EstimateCall(
+		[]llm.AttemptReport{attempt(month(time.September), u), attempt(month(time.October), llm.Usage{})},
+		rub("rub", month(time.September), rates), usd,
+	)
+	if got != (pricing.Cost{Status: "unknown"}) {
+		t.Fatalf("EstimateCall = %+v, want unknown: неизвестная попытка не прячет смену валюты", got)
+	}
+}
+
+func TestPlanValidateRejectsCommaInRevision(t *testing.T) {
+	if rub("2026,09", month(time.September), pricing.Rates{}).Validate() == nil {
+		t.Fatal("Validate: запятая в ревизии принята")
+	}
 }

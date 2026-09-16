@@ -96,8 +96,9 @@ func (p *Provider) withFiles(
 	var created []string
 
 	var (
-		res llm.Result
-		err error
+		res       llm.Result
+		err       error
+		uncertain int
 	)
 
 upload:
@@ -107,6 +108,10 @@ upload:
 
 			id, err = p.upload(ctx, img, "image-"+strconv.Itoa(i)+"-"+strconv.Itoa(j))
 			if err != nil {
+				if unanswered(err) {
+					uncertain = 1
+				}
+
 				break upload
 			}
 
@@ -119,7 +124,7 @@ upload:
 		res, err = send(ctx, attachments)
 	}
 
-	warning := p.cleanup(ctx, created)
+	warning := p.cleanup(ctx, created, uncertain)
 
 	switch {
 	case warning == nil:
@@ -210,9 +215,13 @@ func (p *Provider) upload(ctx context.Context, img llm.Image, name string) (stri
 }
 
 // cleanup удаляет файлы попытки под своим сроком: отменённая или просроченная попытка тоже убирает за собой.
-func (p *Provider) cleanup(ctx context.Context, ids []string) *llm.CleanupWarning {
+func (p *Provider) cleanup(ctx context.Context, ids []string, uncertain int) *llm.CleanupWarning {
 	if len(ids) == 0 {
-		return nil
+		if uncertain == 0 {
+			return nil
+		}
+
+		return &llm.CleanupWarning{Uncertain: uncertain}
 	}
 
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), CleanupBudget)
@@ -230,11 +239,27 @@ func (p *Provider) cleanup(ctx context.Context, ids []string) *llm.CleanupWarnin
 		}
 	}
 
-	if len(left) == 0 {
+	if len(left) == 0 && uncertain == 0 {
 		return nil
 	}
 
-	return &llm.CleanupWarning{Files: left, Err: errors.Join(errs...)}
+	return &llm.CleanupWarning{Files: left, Uncertain: uncertain, Err: errors.Join(errs...)}
+}
+
+// unanswered — отказ загрузки, после которого файл мог остаться: ответа со статусом нет, а запрос
+// мог уйти. Отказ статусом, негодный запрос и отказ входа файла не создают.
+func unanswered(err error) bool {
+	var (
+		status  *llm.StatusError
+		request *llm.RequestError
+		phased  *llm.PhaseError
+	)
+
+	if errors.As(err, &phased) && phased.Phase == llm.PhaseAuth {
+		return false
+	}
+
+	return !errors.As(err, &status) && !errors.As(err, &request)
 }
 
 // remove — `POST /files/{id}/delete`; ответ без deleted=true — отказ.

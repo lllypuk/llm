@@ -12,6 +12,7 @@ const (
 	OutcomeOK          = "ok"
 	OutcomeTruncated   = "truncated"
 	OutcomeFiltered    = "filtered"
+	OutcomeRefused     = "refused"
 	OutcomeCancelled   = "cancelled"
 	OutcomeTimeout     = "timeout"
 	OutcomeHTTP4xx     = "http_4xx"
@@ -70,7 +71,7 @@ func (noopObserver) Attempt(AttemptReport) {}
 func (noopObserver) Call(CallReport) {}
 
 // attemptOutcome называет исход попытки: срок и отмена снаружи — cancelled, свой срок — timeout;
-// обрезанный и отфильтрованный ответ — свои исходы, даже если содержимое негодно.
+// обрезанный, отфильтрованный и отклонённый ответ — свои исходы, даже если содержимое негодно.
 func attemptOutcome(ctx context.Context, err error, finish Finish) string {
 	var status *StatusError
 
@@ -83,6 +84,8 @@ func attemptOutcome(ctx context.Context, err error, finish Finish) string {
 		return OutcomeTruncated
 	case finish.Kind == FinishContentFilter:
 		return OutcomeFiltered
+	case finish.Kind == FinishRefusal:
+		return OutcomeRefused
 	case err == nil:
 		return OutcomeOK
 	case ctx.Err() != nil:

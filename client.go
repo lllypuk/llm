@@ -137,7 +137,7 @@ func (r *call) do(ctx context.Context) (Result, error) {
 		outcome := attemptOutcome(ctx, err, meta.finish)
 		r.observeAttempt(attempt, started, res.Latency, outcome, err, meta)
 
-		if fail := terminalFinish(r.provider, r.req.Model, meta.finish); fail != nil {
+		if fail := terminalFinish(r.provider, r.req.Model, meta.finish, err); fail != nil {
 			r.outcome = outcome
 
 			return Result{}, r.fail(fail)
@@ -295,11 +295,13 @@ func attemptMetaOf(res Result, err error) attemptMeta {
 		meta.server = response.ServerLatency
 	case errors.As(err, &status):
 		meta.requestID = status.RequestID
-		meta.usage = Usage{Known: true}
 	}
 
-	// Вход и загрузка кадров до генерации не доходят: их расход известен и равен нулю.
-	if phaseOf(err) != PhaseInference {
+	// Известный ноль — только доказуемый отказ до генерации: вход, загрузка кадров и 4xx, кроме 408.
+	// 5xx и 408 могли прийти после генерации, их расход неизвестен.
+	rejected := status != nil && status.Status >= http.StatusBadRequest &&
+		status.Status < http.StatusInternalServerError && status.Status != http.StatusRequestTimeout
+	if rejected || phaseOf(err) != PhaseInference {
 		meta.usage = Usage{Known: true}
 	}
 

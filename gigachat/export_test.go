@@ -38,3 +38,40 @@ func (p *Provider) WithFiles(
 ) (llm.Result, error) {
 	return p.withFiles(ctx, msgs, send)
 }
+
+// TokenCache — кеш токенов с подменным запросом OAuth.
+type TokenCache struct{ c *tokenCache }
+
+// NewTokenCache — кеш поверх fetch, отдающего значение токена и срок.
+func NewTokenCache(fetch func(ctx context.Context) (string, time.Time, error)) TokenCache {
+	return TokenCache{c: newTokenCache(func(ctx context.Context) (*token, error) {
+		value, expires, err := fetch(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		return &token{value: value, expires: expires}, nil
+	})}
+}
+
+// Get — значение токена.
+func (t TokenCache) Get(ctx context.Context) (string, error) {
+	tok, err := t.c.get(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	return tok.value, nil
+}
+
+// Flight — ждущие текущего обновления и канал его завершения; nil — обновления нет.
+func (t TokenCache) Flight() (int, <-chan struct{}) {
+	t.c.mu.Lock()
+	defer t.c.mu.Unlock()
+
+	if t.c.flight == nil {
+		return 0, nil
+	}
+
+	return t.c.flight.waiters, t.c.flight.done
+}

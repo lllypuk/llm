@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -86,6 +87,11 @@ func reply(finish, content string) string {
 		`"choices":[{"index":0,"message":{"role":"assistant","content":` + strconv.Quote(content) + `},` +
 		`"finish_reason":"` + finish + `"}],"usage":{"prompt_tokens":120,"completion_tokens":40,"total_tokens":160,` +
 		`"prompt_tokens_details":{"cached_tokens":20},"completion_tokens_details":{"reasoning_tokens":30}}}`
+}
+
+// refusal — ответ отказом модели: content null, finish_reason stop, расход как у reply.
+func refusal(reason string) string {
+	return strings.Replace(reply("stop", ""), `"content":""`, `"content":null,"refusal":`+strconv.Quote(reason), 1)
 }
 
 // fullUsage — расход reply: кеш и рассуждения вычтены из общих, а не прибавлены к ним.
@@ -215,6 +221,7 @@ func TestTerminalFinishNotRetried(t *testing.T) {
 		"length":               {reply("length", `{"brand":`), llm.ErrTruncated, llm.FinishLength},
 		"content_filter":       {reply("content_filter", `отказ`), llm.ErrFiltered, llm.FinishContentFilter},
 		"content_filter пусто": {reply("content_filter", ""), llm.ErrFiltered, llm.FinishContentFilter},
+		"refusal":              {refusal("не могу помочь"), llm.ErrRefused, llm.FinishRefusal},
 	}
 
 	for name, tc := range cases {
@@ -294,8 +301,7 @@ func TestUsageParts(t *testing.T) {
 					"completion_tokens":                   3,
 					"prompt_tokens_details.cached_tokens": 9,
 				},
-				CachedInput: 9,
-				Output:      3,
+				Output: 3,
 			},
 		},
 		"без выхода": {

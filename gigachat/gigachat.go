@@ -104,7 +104,13 @@ func (p *Provider) do(
 			st := httpjson.ReadStatus(resp, maxErrorBody, errorMessage)
 			_ = resp.Body.Close()
 
-			return nil, &llm.StatusError{Status: st.Code, Message: st.Message, Phase: llm.PhaseAuth}
+			return nil, &llm.StatusError{
+				Status:     st.Code,
+				Message:    st.Message,
+				RetryAfter: st.RetryAfter,
+				Phase:      llm.PhaseAuth,
+				RequestID:  resp.Header.Get("X-Request-Id"),
+			}
 		}
 
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorBody))

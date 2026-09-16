@@ -47,8 +47,11 @@ type PricePlan struct {
 func (p PricePlan) Validate() error {
 	var errs []error
 
-	if p.Revision == "" {
+	switch {
+	case p.Revision == "":
 		errs = append(errs, errors.New("pricing: пустая ревизия"))
+	case strings.Contains(p.Revision, ","):
+		errs = append(errs, fmt.Errorf("pricing: %s: запятая в ревизии — разделитель списка ревизий", p.Revision))
 	}
 
 	if p.Currency == "" && !p.Free {
@@ -146,9 +149,9 @@ func Estimate(attempt llm.AttemptReport, plan PricePlan) Cost {
 }
 
 // EstimateCall складывает оценки попыток; попытке достаётся тариф последней ревизии,
-// начавшейся не позже её старта. Разные ревизии перечисляются через запятую в порядке
-// попыток, разные валюты платных ревизий не складываются — unknown; бесплатная ревизия
-// валюты не навязывает.
+// начавшейся не позже её старта; негодная ревизия делает попытку неизвестной. Разные ревизии перечисляются через запятую в порядке попыток.
+// Разные валюты платных ревизий — unknown, даже у попытки с неизвестным расходом; бесплатная
+// валюты не навязывает. Ожидает тарифы одного маршрута с различными ValidFrom.
 func EstimateCall(attempts []llm.AttemptReport, plans ...PricePlan) Cost {
 	var (
 		total     Cost
@@ -159,34 +162,31 @@ func EstimateCall(attempts []llm.AttemptReport, plans ...PricePlan) Cost {
 	)
 
 	for _, attempt := range attempts {
-		est := estimateAt(attempt, plans)
-		if est.Status == StatusUnknown {
+		plan, ok := planAt(plans, attempt.StartedAt)
+		if !ok {
 			continue
 		}
 
-		if est.Status != StatusFree {
-			if paid > 0 && est.Currency != total.Currency {
-				return Cost{Status: StatusUnknown}
-			}
+		if !mergeCurrency(&total, &paid, plan) {
+			return Cost{Status: StatusUnknown}
+		}
 
-			paid++
+		if !slices.Contains(revisions, plan.Revision) {
+			revisions = append(revisions, plan.Revision)
+		}
+
+		est := Estimate(attempt, plan)
+		if est.Status == StatusUnknown {
+			continue
 		}
 
 		if est.AmountMicro > math.MaxInt64-total.AmountMicro {
 			return Cost{Status: StatusUnknown}
 		}
 
-		if est.Status != StatusFree || paid == 0 {
-			total.Currency = est.Currency
-		}
-
 		total.AmountMicro += est.AmountMicro
 		known++
 		partial = partial || est.Status == StatusPartial
-
-		if !slices.Contains(revisions, est.Revision) {
-			revisions = append(revisions, est.Revision)
-		}
 	}
 
 	total.Revision = strings.Join(revisions, ",")
@@ -205,16 +205,28 @@ func EstimateCall(attempts []llm.AttemptReport, plans ...PricePlan) Cost {
 	return total
 }
 
-// estimateAt оценивает попытку ревизией, действовавшей на её старте.
-func estimateAt(attempt llm.AttemptReport, plans []PricePlan) Cost {
-	plan, ok := planAt(plans, attempt.StartedAt)
-	if !ok {
-		return Cost{Status: StatusUnknown}
+// mergeCurrency переносит валюту ревизии в сумму; ложь — платные ревизии расходятся валютой.
+// Бесплатная ревизия валюту платной не перетирает.
+func mergeCurrency(total *Cost, paid *int, plan PricePlan) bool {
+	if plan.Free {
+		if *paid == 0 {
+			total.Currency = plan.Currency
+		}
+
+		return true
 	}
 
-	return Estimate(attempt, plan)
+	if *paid > 0 && plan.Currency != total.Currency {
+		return false
+	}
+
+	*paid++
+	total.Currency = plan.Currency
+
+	return true
 }
 
+// planAt — последняя ревизия, начавшаяся не позже at; негодная не выбирается, и старшая за неё не отвечает.
 func planAt(plans []PricePlan, at time.Time) (PricePlan, bool) {
 	var (
 		found PricePlan
@@ -227,7 +239,7 @@ func planAt(plans []PricePlan, at time.Time) (PricePlan, bool) {
 		}
 	}
 
-	return found, ok
+	return found, ok && found.Validate() == nil
 }
 
 type namedRate struct {

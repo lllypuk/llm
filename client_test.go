@@ -559,6 +559,13 @@ func TestChatStopsOnTerminalFinish(t *testing.T) {
 			outcome: llm.OutcomeFiltered,
 			want:    llm.ErrFiltered,
 		},
+		{
+			step: step{err: &llm.ResponseError{
+				Message: "не могу помочь", Usage: usage, Finish: llm.Finish{Raw: "stop", Kind: llm.FinishRefusal},
+			}},
+			outcome: llm.OutcomeRefused,
+			want:    llm.ErrRefused,
+		},
 	} {
 		f := &fake{steps: []step{tc.step, ok("never", 0, 0)}}
 		obs := &recorder{}
@@ -574,6 +581,19 @@ func TestChatStopsOnTerminalFinish(t *testing.T) {
 			obs.attempts[0].Outcome != tc.outcome || obs.attempts[0].Finish != call.Finish {
 			t.Errorf("%s: отчёт %+v, попытка %+v", tc.outcome, call.Report, obs.attempts[0])
 		}
+	}
+}
+
+// TestChatUnknownFinishKindIsNotTerminal — чужое плечо с незнакомой причиной конца не роняет клиента.
+func TestChatUnknownFinishKindIsNotTerminal(t *testing.T) {
+	t.Parallel()
+
+	done := ok("done", 1, 1)
+	done.res.Finish = llm.Finish{Raw: "novel", Kind: "novel"}
+
+	res, err := client(&fake{steps: []step{done}}, nil).Chat(context.Background(), req())
+	if err != nil || res.Text != "done" {
+		t.Fatalf("ответ %+v, отказ %v", res, err)
 	}
 }
 
@@ -700,6 +720,17 @@ func TestChatUsageKnownWithoutGeneration(t *testing.T) {
 
 	if res.Report.Usage.Known {
 		t.Errorf("сетевой отказ генерации: расход %+v", res.Report.Usage)
+	}
+
+	f = &fake{steps: []step{status(503, 0), ok("done", 2, 3)}}
+
+	res, err = client(f, nil).Chat(context.Background(), req())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if res.Report.Usage.Known || res.Attempts[0].Usage.Known {
+		t.Errorf("5xx генерации: расход %+v", res.Report.Usage)
 	}
 }
 

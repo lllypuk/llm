@@ -68,6 +68,8 @@ func (o *oauth) fetch(ctx context.Context) (*token, error) {
 
 	defer func() { _ = resp.Body.Close() }()
 
+	requestID := resp.Header.Get("X-Request-Id")
+
 	if resp.StatusCode != http.StatusOK {
 		st := httpjson.ReadStatus(resp, maxErrorBody, errorMessage)
 
@@ -76,6 +78,7 @@ func (o *oauth) fetch(ctx context.Context) (*token, error) {
 			Message:    st.Message,
 			RetryAfter: st.RetryAfter,
 			Phase:      llm.PhaseAuth,
+			RequestID:  requestID,
 		}
 	}
 
@@ -85,13 +88,16 @@ func (o *oauth) fetch(ctx context.Context) (*token, error) {
 	}
 
 	if err = httpjson.Decode(resp.Body, maxOAuthBody, &env); err != nil {
-		return nil, &llm.PhaseError{Phase: llm.PhaseAuth, Err: &llm.ResponseError{Message: "ответ OAuth", Err: err}}
+		return nil, &llm.PhaseError{
+			Phase: llm.PhaseAuth,
+			Err:   &llm.ResponseError{Message: "ответ OAuth", RequestID: requestID, Err: err},
+		}
 	}
 
 	if env.AccessToken == "" || env.ExpiresAt <= 0 {
 		return nil, &llm.PhaseError{
 			Phase: llm.PhaseAuth,
-			Err:   &llm.ResponseError{Message: "ответ OAuth без токена или срока"},
+			Err:   &llm.ResponseError{Message: "ответ OAuth без токена или срока", RequestID: requestID},
 		}
 	}
 
@@ -178,7 +184,11 @@ func (c *tokenCache) refresh(ctx context.Context, f *flight) {
 
 	c.mu.Lock()
 
+	// Брошенное обновление кеш не трогает: его токен мог прийти позже токена следующего.
+	current := c.flight == f
+
 	switch {
+	case !current:
 	case err == nil:
 		c.cur = tok
 	case c.cur != nil && c.now().Before(c.cur.expires):
@@ -186,7 +196,7 @@ func (c *tokenCache) refresh(ctx context.Context, f *flight) {
 		tok, err = c.cur, nil
 	}
 
-	if c.flight == f {
+	if current {
 		c.flight = nil
 	}
 

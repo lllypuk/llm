@@ -253,6 +253,59 @@ func TestFailedEarlyRefreshKeepsLiveToken(t *testing.T) {
 	}
 }
 
+// TestAbandonedRefreshDoesNotOverwrite — брошенное обновление, ответившее позже следующего,
+// не подменяет его токен в кеше.
+func TestAbandonedRefreshDoesNotOverwrite(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+
+	var calls atomic.Int32
+
+	cache := gigachat.NewTokenCache(func(context.Context) (string, time.Time, error) {
+		if calls.Add(1) == 1 {
+			<-release
+
+			return "old", time.Now().Add(time.Hour), nil
+		}
+
+		return "new", time.Now().Add(time.Hour), nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	abandoned := make(chan error)
+
+	go func() {
+		_, err := cache.Get(ctx)
+		abandoned <- err
+	}()
+
+	var done <-chan struct{}
+
+	for waiters := 0; waiters == 0; {
+		time.Sleep(time.Millisecond)
+
+		waiters, done = cache.Flight()
+	}
+
+	cancel()
+
+	if err := <-abandoned; !errors.Is(err, context.Canceled) {
+		t.Fatalf("брошенный вызов: %v", err)
+	}
+
+	if tok, err := cache.Get(context.Background()); err != nil || tok != "new" {
+		t.Fatalf("новое обновление: %q, %v", tok, err)
+	}
+
+	close(release)
+	<-done
+
+	if tok, err := cache.Get(context.Background()); err != nil || tok != "new" {
+		t.Errorf("после брошенного обновления: %q, %v", tok, err)
+	}
+}
+
 // TestConcurrentRefreshMerged — десять вызовов на пустом кеше дают один запрос OAuth.
 func TestConcurrentRefreshMerged(t *testing.T) {
 	t.Parallel()

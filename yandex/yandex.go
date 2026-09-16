@@ -144,6 +144,7 @@ type chatResponse struct {
 	Choices []struct {
 		Message struct {
 			Content string `json:"content"`
+			Refusal string `json:"refusal"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -188,10 +189,11 @@ func (r chatResponse) usage() llm.Usage {
 	return u
 }
 
-// split делит общий счётчик на остаток и часть; часть больше общего остаётся частью, а расход — неполным.
+// split делит общий счётчик на остаток и часть. Часть больше общего — противоречие: группа в оценку
+// не идёт вовсе, расход неполный, присланное остаётся в Raw.
 func split(total, part int, known bool) (int, int, bool) {
 	if part > total {
-		return 0, part, false
+		return 0, 0, false
 	}
 
 	return total - part, part, known
@@ -211,13 +213,18 @@ func counter(raw map[string]int, key string, v *int, known bool) (int, bool) {
 	return *v, known
 }
 
-// finish — finish_reason первого варианта.
+// finish — finish_reason первого варианта; непустой refusal — отказ модели при любом finish_reason.
 func (r chatResponse) finish() llm.Finish {
 	if len(r.Choices) == 0 {
 		return llm.Finish{}
 	}
 
 	f := llm.Finish{Raw: r.Choices[0].FinishReason}
+	if strings.TrimSpace(r.Choices[0].Message.Refusal) != "" {
+		f.Kind = llm.FinishRefusal
+
+		return f
+	}
 
 	switch f.Raw {
 	case "stop":
@@ -304,6 +311,8 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (llm.Result, e
 	switch {
 	case len(env.Choices) == 0:
 		return llm.Result{}, env.reject("ответ без choices", requestID)
+	case strings.TrimSpace(env.Choices[0].Message.Refusal) != "":
+		return llm.Result{}, env.reject(env.Choices[0].Message.Refusal, requestID)
 	case strings.TrimSpace(env.Choices[0].Message.Content) == "":
 		return llm.Result{}, env.reject("пустой ответ (HTTP 200 без содержимого)", requestID)
 	}

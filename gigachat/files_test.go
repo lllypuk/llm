@@ -24,6 +24,7 @@ type files struct {
 	uploads  []upload
 	deleted  []string
 	failNth  int // номер загрузки, отвечающей 500; ноль — все удаются
+	brokeNth int // номер загрузки, принятой с оборванным ответом
 	failFrom string
 }
 
@@ -82,6 +83,12 @@ func (f *files) upload(t *testing.T, w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Request-Id", "req-fail")
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte(`{"message":"storage"}`))
+
+		return
+	}
+
+	if n == f.brokeNth {
+		_, _ = w.Write([]byte(`{"id":"f` + strconv.Itoa(n)))
 
 		return
 	}
@@ -173,6 +180,38 @@ func TestPartialUploadRemoved(t *testing.T) {
 	uploads, deleted := f.state()
 	if sent != 0 || uploads != 2 || !reflect.DeepEqual(deleted, []string{"f1"}) {
 		t.Errorf("генераций %d, загрузок %d, удалены %v", sent, uploads, deleted)
+	}
+
+	var warned *llm.WarnedError
+	if errors.As(err, &warned) {
+		t.Errorf("отказ статусом файла не оставляет: %+v", warned.Cleanup)
+	}
+}
+
+// TestUnansweredUploadIsUncertain — принятый сервером файл с оборванным ответом неубираем,
+// и предупреждение уборки говорит об этом, хотя известные файлы убраны.
+func TestUnansweredUploadIsUncertain(t *testing.T) {
+	t.Parallel()
+
+	f := &files{brokeNth: 2}
+	p := provider(t, &backend{api: f.serve(t)})
+	msgs := []llm.Message{
+		{Role: llm.RoleUser, Images: []llm.Image{jpeg("a")}},
+		{Role: llm.RoleUser, Images: []llm.Image{jpeg("b")}},
+	}
+
+	_, err := p.WithFiles(context.Background(), msgs, func(context.Context, [][]string) (llm.Result, error) {
+		return llm.Result{}, nil
+	})
+
+	var warned *llm.WarnedError
+	if !errors.As(err, &warned) || warned.Cleanup.Uncertain != 1 || len(warned.Cleanup.Files) != 0 ||
+		warned.Cleanup.Err != nil {
+		t.Fatalf("отказ %v", err)
+	}
+
+	if _, deleted := f.state(); !reflect.DeepEqual(deleted, []string{"f1"}) {
+		t.Errorf("удалены %v", deleted)
 	}
 }
 

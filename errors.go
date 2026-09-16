@@ -96,11 +96,13 @@ func (e *PhaseError) Error() string { return string(e.Phase) + ": " + e.Err.Erro
 
 func (e *PhaseError) Unwrap() error { return e.Err }
 
-// CleanupWarning — созданное попыткой у поставщика осталось неубранным: генерацию это не отменяет,
-// и повтор ради уборки не оплачивается. Files — что осталось, Err — почему.
+// CleanupWarning — созданное попыткой у поставщика могло остаться неубранным: генерацию это не
+// отменяет, и повтор ради уборки не оплачивается. Files — что осталось, Err — почему; Uncertain —
+// загрузки без ответа: файл мог создаться, а id его неизвестен.
 type CleanupWarning struct {
-	Files []string
-	Err   error
+	Files     []string
+	Uncertain int
+	Err       error
 }
 
 // WarnedError — отказ попытки вместе с предупреждением уборки; цепочка ведёт к отказу, а не к уборке.
@@ -113,11 +115,12 @@ func (e *WarnedError) Error() string { return e.Err.Error() }
 
 func (e *WarnedError) Unwrap() error { return e.Err }
 
-// ErrTruncated и ErrFiltered — генерация кончилась пределом длины или фильтром: ответ
-// оплачен, и повтор оплатил бы тот же исход ещё раз.
+// ErrTruncated, ErrFiltered и ErrRefused — генерация кончилась пределом длины, фильтром или
+// отказом модели: ответ оплачен, и повтор оплатил бы тот же исход ещё раз.
 var (
 	ErrTruncated = errors.New("ответ обрезан пределом длины")
 	ErrFiltered  = errors.New("ответ остановлен фильтром")
+	ErrRefused   = errors.New("модель отказалась отвечать")
 )
 
 // CallError — отказ вызова целиком, с решением о повторе, потраченным временем
@@ -236,8 +239,9 @@ func phaseOf(err error) Phase {
 	return PhaseInference
 }
 
-// terminalFinish — отказ по причине конца генерации: обрезанный и отфильтрованный ответ не повторяется.
-func terminalFinish(provider, model string, finish Finish) *CallError {
+// terminalFinish — отказ по причине конца генерации: обрезанный, отфильтрованный и отклонённый
+// моделью ответ не повторяется. Причина из конверта попытки дописывается к сообщению.
+func terminalFinish(provider, model string, finish Finish, attemptErr error) *CallError {
 	var err error
 
 	switch finish.Kind {
@@ -245,15 +249,26 @@ func terminalFinish(provider, model string, finish Finish) *CallError {
 		err = ErrTruncated
 	case FinishContentFilter:
 		err = ErrFiltered
-	case "", FinishStop, FinishRefusal, FinishToolCall:
+	case FinishRefusal:
+		err = ErrRefused
+	case "", FinishStop, FinishToolCall:
 		return nil
+	default:
+		return nil
+	}
+
+	message := err.Error()
+
+	var response *ResponseError
+	if errors.As(attemptErr, &response) && response.Message != "" {
+		message += ": " + response.Message
 	}
 
 	return &CallError{
 		Provider: provider,
 		Model:    model,
 		Phase:    PhaseInference,
-		Message:  err.Error(),
+		Message:  message,
 		Finish:   finish,
 		Class:    RetryNever,
 		Err:      err,
