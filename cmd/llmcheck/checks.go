@@ -21,7 +21,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"github.com/lllypuk/llm"
 	"github.com/lllypuk/llm/llmconfig"
@@ -709,10 +708,10 @@ func answerField(text, field string, exact bool) (any, bool) {
 	return v, true
 }
 
-// isWord — ответ без регистра и обрамляющей пунктуации совпадает со словом целиком: подстрока
-// приняла бы «not red» и «некрасный».
+// isWord — ответ без регистра, пробелов, кавычек и точки в конце совпадает со словом целиком: подстрока
+// приняла бы «not red», а срезанные знаки — «-391» и «≠391».
 func isWord(s string, words ...string) bool {
-	s = strings.ToLower(strings.TrimFunc(s, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }))
+	s = strings.ToLower(strings.Trim(s, " \t\r\n.!,;:«»\"'"))
 
 	return slices.Contains(words, s)
 }

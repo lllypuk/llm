@@ -358,6 +358,19 @@ func TestAnswerMatchesChecksTypes(t *testing.T) {
 	}
 }
 
+// TestAnswerMatchesKeepsNumberSign — знак и единица у числа текстом не срезаются: «-391» — не произведение.
+func TestAnswerMatchesKeepsNumberSign(t *testing.T) {
+	t.Parallel()
+
+	never := func(any) bool { return false }
+
+	for text, want := range map[string]bool{"391": true, "391.": true, "-391": false, "−391": false, "≠391": false, "391%": false} {
+		if got := answerMatches(llm.ModeText, text, fieldAnswer, never, wantProduct); got != want {
+			t.Errorf("%q: %t", text, got)
+		}
+	}
+}
+
 // TestAnswerMatchesRejectsNegatedColor — отрицание цвета не проходит ни полем, ни текстом.
 func TestAnswerMatchesRejectsNegatedColor(t *testing.T) {
 	t.Parallel()
