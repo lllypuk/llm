@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"time"
+
+	"github.com/lllypuk/llm"
 )
 
 // Send — GET по пути API через do: вход и 401 без протокола chat.
@@ -26,4 +28,13 @@ func (p *Provider) Waiters() int {
 	}
 
 	return p.tokens.flight.waiters
+}
+
+// WithFiles — загрузка кадров, send и уборка без протокола chat.
+func (p *Provider) WithFiles(
+	ctx context.Context,
+	msgs []llm.Message,
+	send func(ctx context.Context, attachments [][]string) (llm.Result, error),
+) (llm.Result, error) {
+	return p.withFiles(ctx, msgs, send)
 }

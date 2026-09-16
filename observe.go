@@ -38,6 +38,7 @@ type AttemptReport struct {
 	Duration       time.Duration
 	ServerLatency  time.Duration
 	Usage          Usage
+	Cleanup        *CleanupWarning
 }
 
 // CallReport — вызов целиком: исход, класс отказа, число попыток, расход всех попыток.

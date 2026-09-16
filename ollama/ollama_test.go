@@ -54,20 +54,16 @@ func TestCompleteReadsEnvelope(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := llm.Result{
-		Model:  "m:latest",
-		Text:   `{"a":1}`,
-		Finish: llm.Finish{Raw: "stop", Kind: llm.FinishStop},
-		Usage: llm.Usage{
-			Raw:           map[string]int{"prompt_eval_count": 12, "eval_count": 7},
-			BillableInput: 12,
-			Output:        7,
-			Known:         true,
-		},
-		ServerLatency: 1500 * time.Millisecond,
+	usage := llm.Usage{
+		Raw:           map[string]int{"prompt_eval_count": 12, "eval_count": 7},
+		BillableInput: 12,
+		Output:        7,
+		Known:         true,
 	}
-	if !reflect.DeepEqual(res, want) {
-		t.Errorf("результат %+v, ожидался %+v", res, want)
+	stop := llm.Finish{Raw: "stop", Kind: llm.FinishStop}
+	if res.Model != "m:latest" || res.Text != `{"a":1}` || res.Finish != stop || res.Cleanup != nil ||
+		!reflect.DeepEqual(res.Usage, usage) || res.ServerLatency != 1500*time.Millisecond {
+		t.Errorf("результат %+v", res)
 	}
 }
 

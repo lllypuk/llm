@@ -728,3 +728,25 @@ func TestArithmeticSaturates(t *testing.T) {
 		t.Errorf("бюджет с большой паузой %s", got)
 	}
 }
+
+// TestCleanupWarningKeepsClassAndReport — предупреждение уборки не меняет класс отказа и едет в отчёт своей попытки.
+func TestCleanupWarningKeepsClassAndReport(t *testing.T) {
+	t.Parallel()
+
+	warning := &llm.CleanupWarning{Files: []string{"f1"}, Err: errors.New("delete")}
+	failed := step{err: &llm.WarnedError{
+		Err:     &llm.StatusError{Status: http.StatusBadGateway, RequestID: "r1"},
+		Cleanup: warning,
+	}}
+	f := &fake{steps: []step{failed, ok("done", 1, 1)}}
+
+	res, err := client(f, nil).Chat(context.Background(), req())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if f.count() != 2 || res.Attempts[0].Cleanup != warning || res.Attempts[0].RequestID != "r1" ||
+		res.Attempts[0].Outcome != llm.OutcomeHTTP5xx || res.Attempts[1].Cleanup != nil || res.Cleanup != nil {
+		t.Errorf("попыток %d, отчёты %+v", f.count(), res.Attempts)
+	}
+}

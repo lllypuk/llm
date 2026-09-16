@@ -252,6 +252,8 @@ type Result struct {
 	RequestID string
 	// ServerLatency — время на стороне поставщика, если он его сообщает; ноль — не сообщил.
 	ServerLatency time.Duration
+	// Cleanup — уборка удавшейся попытки не удалась; nil — убирать было нечего или убрано.
+	Cleanup *CleanupWarning
 	// StartedAt — начало вызова; Latency — сколько ждал вызывающий: все попытки и паузы.
 	StartedAt time.Time
 	Latency   time.Duration
@@ -261,7 +263,8 @@ type Result struct {
 
 // Provider — одна попытка вызова у конкретного плеча. Отказ HTTP возвращается
 // [*StatusError], негодный ответ — [*ResponseError] (с расходом, если он был в
-// конверте), негодный запрос — [*RequestError], сеть и контекст — как есть.
+// конверте), негодный запрос — [*RequestError], сеть и контекст — как есть;
+// неудавшаяся уборка при отказе — [*WarnedError] поверх любого из них.
 // Capabilities без сети; ложное ok — профиль модели неизвестен, не подтверждено ничего.
 type Provider interface {
 	Name() string

@@ -203,6 +203,7 @@ func (r *call) observeAttempt(
 		Duration:       duration,
 		ServerLatency:  meta.server,
 		Usage:          meta.usage,
+		Cleanup:        meta.cleanup,
 	}
 
 	r.attempts = append(r.attempts, report)
@@ -258,33 +259,45 @@ type attemptMeta struct {
 	requestID string
 	finish    Finish
 	server    time.Duration
+	cleanup   *CleanupWarning
 }
 
 // attemptMetaOf — у отказа метаданные из конверта, если он был: негодное содержимое или не-2xx.
 func attemptMetaOf(res Result, err error) attemptMeta {
 	if err == nil {
 		return attemptMeta{
-			usage: res.Usage, model: res.Model, requestID: res.RequestID, finish: res.Finish, server: res.ServerLatency,
+			usage:     res.Usage,
+			model:     res.Model,
+			requestID: res.RequestID,
+			finish:    res.Finish,
+			server:    res.ServerLatency,
+			cleanup:   res.Cleanup,
 		}
+	}
+
+	var meta attemptMeta
+
+	var warned *WarnedError
+	if errors.As(err, &warned) {
+		meta.cleanup = warned.Cleanup
 	}
 
 	var response *ResponseError
-	if errors.As(err, &response) {
-		return attemptMeta{
-			usage:     response.Usage,
-			model:     response.Model,
-			requestID: response.RequestID,
-			finish:    response.Finish,
-			server:    response.ServerLatency,
-		}
-	}
 
 	var status *StatusError
-	if errors.As(err, &status) {
-		return attemptMeta{requestID: status.RequestID}
+
+	switch {
+	case errors.As(err, &response):
+		meta.usage = response.Usage
+		meta.model = response.Model
+		meta.requestID = response.RequestID
+		meta.finish = response.Finish
+		meta.server = response.ServerLatency
+	case errors.As(err, &status):
+		meta.requestID = status.RequestID
 	}
 
-	return attemptMeta{}
+	return meta
 }
 
 func (c *Client) observer() Observer {

@@ -96,6 +96,23 @@ func (e *PhaseError) Error() string { return string(e.Phase) + ": " + e.Err.Erro
 
 func (e *PhaseError) Unwrap() error { return e.Err }
 
+// CleanupWarning — созданное попыткой у поставщика осталось неубранным: генерацию это не отменяет,
+// и повтор ради уборки не оплачивается. Files — что осталось, Err — почему.
+type CleanupWarning struct {
+	Files []string
+	Err   error
+}
+
+// WarnedError — отказ попытки вместе с предупреждением уборки; цепочка ведёт к отказу, а не к уборке.
+type WarnedError struct {
+	Err     error
+	Cleanup *CleanupWarning
+}
+
+func (e *WarnedError) Error() string { return e.Err.Error() }
+
+func (e *WarnedError) Unwrap() error { return e.Err }
+
 // ErrTruncated и ErrFiltered — генерация кончилась пределом длины или фильтром: ответ
 // оплачен, и повтор оплатил бы тот же исход ещё раз.
 var (
