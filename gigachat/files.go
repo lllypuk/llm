@@ -246,8 +246,9 @@ func (p *Provider) cleanup(ctx context.Context, ids []string, uncertain int) *ll
 	return &llm.CleanupWarning{Files: left, Uncertain: uncertain, Err: errors.Join(errs...)}
 }
 
-// unanswered — отказ загрузки, после которого файл мог остаться: ответа со статусом нет, а запрос
-// мог уйти. Отказ статусом, негодный запрос и отказ входа файла не создают.
+// unanswered — отказ загрузки, после которого файл мог остаться: запрос мог уйти, а отказа
+// до записи нет. Файл не создают только 4xx кроме 408, негодный запрос и отказ входа; 5xx и 408
+// шлюз отдаёт и после записи.
 func unanswered(err error) bool {
 	var (
 		status  *llm.StatusError
@@ -255,11 +256,16 @@ func unanswered(err error) bool {
 		phased  *llm.PhaseError
 	)
 
-	if errors.As(err, &phased) && phased.Phase == llm.PhaseAuth {
+	switch {
+	case errors.As(err, &phased) && phased.Phase == llm.PhaseAuth,
+		errors.As(err, &status) && status.Phase == llm.PhaseAuth,
+		errors.As(err, &request):
 		return false
+	case status != nil:
+		return status.Status >= http.StatusInternalServerError || status.Status == http.StatusRequestTimeout
+	default:
+		return true
 	}
-
-	return !errors.As(err, &status) && !errors.As(err, &request)
 }
 
 // remove — `POST /files/{id}/delete`; ответ без deleted=true — отказ.

@@ -2,6 +2,7 @@ package gigachat_test
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,7 +24,8 @@ type files struct {
 	mu       sync.Mutex
 	uploads  []upload
 	deleted  []string
-	failNth  int // номер загрузки, отвечающей 500; ноль — все удаются
+	failNth  int // номер загрузки, отвечающей failCode (500 по умолчанию); ноль — все удаются
+	failCode int
 	brokeNth int // номер загрузки, принятой с оборванным ответом
 	failFrom string
 }
@@ -81,7 +83,7 @@ func (f *files) upload(t *testing.T, w http.ResponseWriter, r *http.Request) {
 	n := len(f.uploads)
 	if n == f.failNth {
 		w.Header().Set("X-Request-Id", "req-fail")
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(cmp.Or(f.failCode, http.StatusInternalServerError))
 		_, _ = w.Write([]byte(`{"message":"storage"}`))
 
 		return
@@ -183,8 +185,16 @@ func TestPartialUploadRemoved(t *testing.T) {
 	}
 
 	var warned *llm.WarnedError
-	if errors.As(err, &warned) {
-		t.Errorf("отказ статусом файла не оставляет: %+v", warned.Cleanup)
+	if !errors.As(err, &warned) || warned.Cleanup.Uncertain != 1 {
+		t.Errorf("500 не доказывает, что файла нет: %v", err)
+	}
+
+	f = &files{failNth: 1, failCode: http.StatusRequestEntityTooLarge}
+
+	_, err = provider(t, &backend{api: f.serve(t)}).WithFiles(context.Background(), msgs[:1],
+		func(context.Context, [][]string) (llm.Result, error) { return llm.Result{}, nil })
+	if !errors.As(err, &status) || errors.As(err, &warned) {
+		t.Errorf("4xx файла не оставляет: %v", err)
 	}
 }
 
