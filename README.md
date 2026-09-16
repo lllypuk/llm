@@ -2,7 +2,7 @@
 
 Вызов языковой модели одним контрактом поверх нескольких плеч. Корень пакета — контракт,
 повторы, бюджет времени, классы отказа и наблюдатель; протокол поставщика — в подпакете.
-Сейчас есть `ollama` (нативный `/api/chat`), следом `gigachat` и `yandex`.
+Есть `ollama` (нативный `/api/chat`), `gigachat` (OAuth, `/files`) и `yandex` (OpenAI-совместимый `chat/completions`).
 
 ```go
 c := llm.New(ollama.New("http://localhost:11434"), 90*time.Second)
