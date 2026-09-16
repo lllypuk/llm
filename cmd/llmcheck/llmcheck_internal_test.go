@@ -75,8 +75,8 @@ func TestParseFlagsRejects(t *testing.T) {
 	}
 }
 
-// fakeOllama отвечает всем полям проверок сразу, а маршруту со схемой — только полем схемы; на предел
-// в один токен — обрезанным ответом.
+// fakeOllama отвечает всем полям проверок сразу, маршруту со схемой — только полем схемы, текстовому —
+// словом проверки связи; на предел в один токен — обрезанным ответом.
 func fakeOllama(t *testing.T, calls *int) *httptest.Server {
 	t.Helper()
 
@@ -104,6 +104,10 @@ func fakeOllama(t *testing.T, calls *int) *httptest.Server {
 
 		answer, _ := json.Marshal(full)
 		content, reason := string(answer), "stop"
+
+		if len(req.Format) == 0 {
+			content = wantTrue
+		}
 
 		if req.Options.NumPredict == 1 {
 			content, reason = "Пон", "length"
@@ -343,10 +347,41 @@ func TestAnswerMatchesChecksTypes(t *testing.T) {
 		{llm.ModeJSON, `{"ok":true} {"ok":false}`, false},
 		{llm.ModeText, "true", true},
 		{llm.ModeText, "нет", false},
+		{llm.ModeText, "True.", true},
+		{llm.ModeText, "not true", false},
 	}
 
 	for _, tc := range cases {
-		if got := answerMatches(tc.mode, tc.text, fieldOK, isTrue, "true"); got != tc.want {
+		if got := answerMatches(tc.mode, tc.text, fieldOK, isTrue, wantTrue); got != tc.want {
+			t.Errorf("%s %s: %t", tc.mode, tc.text, got)
+		}
+	}
+}
+
+// TestAnswerMatchesRejectsNegatedColor — отрицание цвета не проходит ни полем, ни текстом.
+func TestAnswerMatchesRejectsNegatedColor(t *testing.T) {
+	t.Parallel()
+
+	isRed := func(v any) bool {
+		s, ok := v.(string)
+
+		return ok && isWord(s, colorWords()...)
+	}
+
+	cases := []struct {
+		mode llm.Mode
+		text string
+		want bool
+	}{
+		{llm.ModeSchema, `{"color":"Красный"}`, true},
+		{llm.ModeSchema, `{"color":"not red"}`, false},
+		{llm.ModeJSON, `{"color":"некрасный"}`, false},
+		{llm.ModeText, "Красный.", true},
+		{llm.ModeText, "не красный", false},
+	}
+
+	for _, tc := range cases {
+		if got := answerMatches(tc.mode, tc.text, fieldColor, isRed, colorWords()...); got != tc.want {
 			t.Errorf("%s %s: %t", tc.mode, tc.text, got)
 		}
 	}

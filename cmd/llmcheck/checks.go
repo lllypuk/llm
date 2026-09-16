@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/lllypuk/llm"
 	"github.com/lllypuk/llm/llmconfig"
@@ -52,8 +53,7 @@ const (
 	typeBoolean  = "boolean"
 	typeString   = "string"
 	typeInteger  = "integer"
-	wantColorRU  = "красн"
-	wantColorEN  = "red"
+	wantTrue     = "true"
 	wantProduct  = "391"
 	productQuery = "Сколько будет 17 умножить на 23?"
 )
@@ -263,7 +263,7 @@ func (r *runner) checkModel(ctx context.Context, task string) result {
 	out := r.verdict(checkModel, task, res, err)
 	if err == nil {
 		isTrue := func(v any) bool { return v == true }
-		out.expect(answerMatches(desc.Output.Mode, res.Text, fieldOK, isTrue, "true"), "ответ не ok=true")
+		out.expect(answerMatches(desc.Output.Mode, res.Text, fieldOK, isTrue, wantTrue), "ответ не ok=true")
 	}
 
 	return out
@@ -303,9 +303,9 @@ func (r *runner) checkVision(ctx context.Context, task string) result {
 		isRed := func(v any) bool {
 			s, ok := v.(string)
 
-			return ok && containsAny(s, wantColorRU, wantColorEN)
+			return ok && isWord(s, colorWords()...)
 		}
-		out.expect(answerMatches(desc.Output.Mode, res.Text, fieldColor, isRed, wantColorRU, wantColorEN),
+		out.expect(answerMatches(desc.Output.Mode, res.Text, fieldColor, isRed, colorWords()...),
 			"цвет кадра не назван: кадр не дошёл до модели")
 	}
 
@@ -675,10 +675,10 @@ func prompt(mode llm.Mode, field, typ, question string) string {
 	}
 }
 
-// answerMatches — у JSON-форм поле ответа проходит want, у текста текст содержит одно из слов.
+// answerMatches — у JSON-форм поле ответа проходит want, у текста текст целиком — одно из слов.
 func answerMatches(mode llm.Mode, text, field string, want func(any) bool, words ...string) bool {
 	if mode != llm.ModeJSON && mode != llm.ModeSchema {
-		return containsAny(text, words...)
+		return isWord(text, words...)
 	}
 
 	v, ok := answerField(text, field, mode == llm.ModeSchema)
@@ -709,10 +709,17 @@ func answerField(text, field string, exact bool) (any, bool) {
 	return v, true
 }
 
-func containsAny(s string, words ...string) bool {
-	s = strings.ToLower(s)
+// isWord — ответ без регистра и обрамляющей пунктуации совпадает со словом целиком: подстрока
+// приняла бы «not red» и «некрасный».
+func isWord(s string, words ...string) bool {
+	s = strings.ToLower(strings.TrimFunc(s, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }))
 
-	return slices.ContainsFunc(words, func(w string) bool { return strings.Contains(s, w) })
+	return slices.Contains(words, s)
+}
+
+// colorWords — названия цвета кадра проверки vision.
+func colorWords() []string {
+	return []string{"красный", "красная", "красное", "red"}
 }
 
 // failNote — отказ словами протокола: класс, исход, фаза и код. Текст ошибки поставщика не печатается —
