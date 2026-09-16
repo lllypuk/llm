@@ -42,6 +42,19 @@ func New(host string) *Provider {
 // Name — [Name].
 func (p *Provider) Name() string { return Name }
 
+// Capabilities — профиль протокола, один на все модели: демон принимает кадры и format
+// у любой, а модель без vision отказывает ответом демона. Предела кадров протокол не ставит.
+func (p *Provider) Capabilities(string) (llm.Capabilities, bool) {
+	return llm.Capabilities{
+		Vision:          true,
+		JSON:            true,
+		Schema:          true,
+		Strict:          true,
+		Temperature:     true,
+		MaxOutputTokens: true,
+	}, true
+}
+
 type message struct {
 	Role    string   `json:"role"`
 	Content string   `json:"content"`
@@ -50,6 +63,7 @@ type message struct {
 
 type options struct {
 	Temperature *float64 `json:"temperature,omitempty"`
+	NumPredict  int      `json:"num_predict,omitempty"`
 }
 
 type request struct {
@@ -77,26 +91,51 @@ type response struct {
 }
 
 // usage — расход из конверта: отсутствующий или отрицательный счётчик делает расход неполным.
+// Кеша и рассуждений демон отдельно не называет: рассуждения сидят в eval_count.
 func (r response) usage() llm.Usage {
-	u := llm.Usage{Known: true}
-	u.InputTokens, u.Known = counter(r.PromptEvalCount, u.Known)
-	u.OutputTokens, u.Known = counter(r.EvalCount, u.Known)
+	u := llm.Usage{Raw: map[string]int{}, Known: true}
+	u.BillableInput, u.Known = counter(u.Raw, "prompt_eval_count", r.PromptEvalCount, u.Known)
+	u.Output, u.Known = counter(u.Raw, "eval_count", r.EvalCount, u.Known)
 
 	return u
 }
 
-func counter(v *int, known bool) (int, bool) {
-	if v == nil || *v < 0 {
+// counter — счётчик конверта; присланный кладётся в raw как есть, даже отрицательный.
+func counter(raw map[string]int, key string, v *int, known bool) (int, bool) {
+	if v == nil {
+		return 0, false
+	}
+
+	raw[key] = *v
+	if *v < 0 {
 		return 0, false
 	}
 
 	return *v, known
 }
 
+// finish — done_reason нормализованный; load и unload демона — не конец генерации.
+func (r response) finish() llm.Finish {
+	f := llm.Finish{Raw: r.DoneReason}
+
+	switch r.DoneReason {
+	case "stop":
+		f.Kind = llm.FinishStop
+	case "length":
+		f.Kind = llm.FinishLength
+	}
+
+	return f
+}
+
 // reject — отказ по негодному содержимому с метаданными конверта: модель и время были.
 func (r response) reject(msg string) error {
 	return &llm.ResponseError{
-		Message: msg, Usage: r.usage(), Model: r.Model, ServerLatency: time.Duration(r.TotalDuration),
+		Message:       msg,
+		Usage:         r.usage(),
+		Model:         r.Model,
+		Finish:        r.finish(),
+		ServerLatency: time.Duration(r.TotalDuration),
 	}
 }
 
@@ -152,7 +191,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (llm.Result, e
 	return llm.Result{
 		Model:         env.Model,
 		Text:          env.Message.Content,
-		FinishReason:  env.DoneReason,
+		Finish:        env.finish(),
 		Usage:         env.usage(),
 		ServerLatency: time.Duration(env.TotalDuration),
 	}, nil
@@ -198,8 +237,8 @@ func (p *Provider) encode(req llm.Request) request {
 	case llm.ModeText:
 	}
 
-	if req.Temperature != nil {
-		out.Options = &options{Temperature: req.Temperature}
+	if req.Options.Temperature != nil || req.Options.MaxOutputTokens > 0 {
+		out.Options = &options{Temperature: req.Options.Temperature, NumPredict: req.Options.MaxOutputTokens}
 	}
 
 	return out

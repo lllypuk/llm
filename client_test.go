@@ -2,8 +2,11 @@ package llm_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -23,9 +26,21 @@ type fake struct {
 	steps []step
 	calls int
 	block bool // блокировать до отмены контекста
+	caps  *llm.Capabilities
 }
 
 func (f *fake) Name() string { return "fake" }
+
+// Capabilities — заданный профиль; без него подтверждено всё, кроме пределов кадров.
+func (f *fake) Capabilities(string) (llm.Capabilities, bool) {
+	if f.caps != nil {
+		return *f.caps, true
+	}
+
+	return llm.Capabilities{
+		Vision: true, JSON: true, Schema: true, Strict: true, Temperature: true, Reasoning: true, MaxOutputTokens: true,
+	}, true
+}
 
 func (f *fake) Complete(ctx context.Context, _ llm.Request) (llm.Result, error) {
 	f.mu.Lock()
@@ -71,7 +86,7 @@ func (r *recorder) Call(c llm.CallReport) {
 }
 
 func ok(text string, in, out int) step {
-	return step{res: llm.Result{Text: text, Usage: llm.Usage{InputTokens: in, OutputTokens: out, Known: true}}}
+	return step{res: llm.Result{Text: text, Usage: llm.Usage{BillableInput: in, Output: out, Known: true}}}
 }
 
 func status(code int, retryAfter time.Duration) step {
@@ -135,7 +150,7 @@ func TestChatRetriesImmediateAndSucceeds(t *testing.T) {
 		t.Errorf("исходы попыток %v", obs.attempts)
 	}
 
-	if c := obs.calls[0]; c.Outcome != llm.OutcomeOK || c.Attempts != 3 || c.Usage.InputTokens != 10 {
+	if c := obs.calls[0]; c.Outcome != llm.OutcomeOK || c.Attempts != 3 || c.Usage.BillableInput != 10 {
 		t.Errorf("отчёт вызова %+v", c)
 	}
 }
@@ -353,7 +368,7 @@ func TestFingerprint(t *testing.T) {
 func TestChatFailureCarriesReport(t *testing.T) {
 	t.Parallel()
 
-	spent := step{err: &llm.ResponseError{Message: "пусто", Usage: llm.Usage{InputTokens: 7, Known: true}}}
+	spent := step{err: &llm.ResponseError{Message: "пусто", Usage: llm.Usage{BillableInput: 7, Known: true}}}
 	f := &fake{steps: []step{spent, status(500, 0)}}
 	c := client(f, nil)
 	c.Attempts = 2
@@ -361,7 +376,8 @@ func TestChatFailureCarriesReport(t *testing.T) {
 	_, err := c.Chat(context.Background(), req())
 
 	call := callError(t, err)
-	if call.Report.Usage.InputTokens != 7 || call.Report.Attempts != 2 || call.Report.CallID != "c1" {
+	if call.Report.Usage.BillableInput != 7 || call.Report.Attempts != 2 || len(call.Attempts) != 2 ||
+		call.Report.CallID != "c1" {
 		t.Errorf("отчёт отказа %+v", call.Report)
 	}
 
@@ -372,7 +388,7 @@ func TestChatFailureCarriesReport(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if res.Usage.InputTokens != 11 || res.Report.Usage.InputTokens != 18 || !res.Report.Usage.Known {
+	if res.Usage.BillableInput != 11 || res.Report.Usage.BillableInput != 18 || !res.Report.Usage.Known {
 		t.Errorf("расход %+v, отчёт %+v", res.Usage, res.Report.Usage)
 	}
 }
@@ -388,6 +404,11 @@ func TestChatRejectsBadRequestBeforeProvider(t *testing.T) {
 		{Model: "m", Output: llm.Output{Mode: llm.ModeSchema}},
 		{Model: ""},
 		{Model: "m", Output: llm.Output{Mode: "xml"}},
+		{Model: "m", Output: llm.Output{Mode: llm.ModeJSON, Strict: true}},
+		{Model: "m", Output: llm.Output{Mode: llm.ModeText, Name: "answer"}},
+		{Model: "m", Options: llm.Options{Temperature: llm.Ptr(-0.1)}},
+		{Model: "m", Options: llm.Options{MaxOutputTokens: -1}},
+		{Model: "m", Options: llm.Options{Reasoning: "max"}},
 	} {
 		obs := &recorder{}
 
@@ -475,20 +496,227 @@ func TestChatLongRetryAfterOnAnyStatus(t *testing.T) {
 func TestUsageAdd(t *testing.T) {
 	t.Parallel()
 
-	sum := (llm.Usage{Known: true}).Add(llm.Usage{InputTokens: 3, Known: true}).Add(llm.Usage{InputTokens: 4})
-	if sum.InputTokens != 7 || sum.Known {
+	sum := (llm.Usage{Known: true}).Add(llm.Usage{BillableInput: 3, Known: true}).Add(llm.Usage{BillableInput: 4})
+	if sum.BillableInput != 7 || sum.Known {
 		t.Errorf("сумма %+v", sum)
 	}
 
-	big := llm.Usage{InputTokens: 1<<62 + 1<<61, Known: true}
-	if over := big.Add(big); over.Known || over.InputTokens <= 0 {
+	big := llm.Usage{Output: 1<<62 + 1<<61, Known: true}
+	if over := big.Add(big); over.Known || over.Output <= 0 {
 		t.Errorf("переполнение %+v", over)
 	}
 
-	neg := (llm.Usage{Known: true}).Add(llm.Usage{InputTokens: -1, Known: true})
-	if neg.Known || neg.InputTokens != 0 {
+	neg := (llm.Usage{Known: true}).Add(llm.Usage{CachedInput: -1, Known: true})
+	if neg.Known || neg.CachedInput != 0 {
 		t.Errorf("отрицательное %+v", neg)
 	}
+
+	raw := llm.Usage{Raw: map[string]int{"x": math.MaxInt}, Known: true}
+	if over := raw.Add(raw); over.Known || over.Raw["x"] != math.MaxInt {
+		t.Errorf("переполнение сырого счётчика %+v", over)
+	}
+}
+
+// TestUsageAddKeepsPartsDisjoint — кеш GigaChat сверх оплачиваемого входа и рассуждения сверх
+// выхода: сумма двух попыток складывает части, ничего не вычитая, и сырые счётчики по ключам.
+func TestUsageAddKeepsPartsDisjoint(t *testing.T) {
+	t.Parallel()
+
+	attempt := llm.Usage{
+		Raw:           map[string]int{"prompt_tokens": 100, "precached_prompt_tokens": 40, "completion_tokens": 9},
+		BillableInput: 100,
+		CachedInput:   40,
+		Reasoning:     5,
+		Output:        4,
+		Known:         true,
+	}
+
+	sum := attempt.Add(attempt)
+	if sum.BillableInput != 200 || sum.CachedInput != 80 || sum.InputTokens() != 280 ||
+		sum.OutputTokens() != 18 || !sum.Known {
+		t.Errorf("сумма %+v", sum)
+	}
+
+	if sum.Raw["prompt_tokens"] != 200 || sum.Raw["precached_prompt_tokens"] != 80 ||
+		attempt.Raw["prompt_tokens"] != 100 {
+		t.Errorf("сырые счётчики %v, слагаемое %v", sum.Raw, attempt.Raw)
+	}
+
+	if empty := (llm.Usage{Known: true}).Add(llm.Usage{Known: true}); empty.Raw != nil {
+		t.Errorf("пустая сумма завела сырые счётчики %v", empty.Raw)
+	}
+}
+
+// TestChatStopsOnTerminalFinish — предел длины и фильтр оплачены: попытка одна, класс never,
+// исход свой, расход и причина в отчёте — и у удавшегося конверта, и у негодного содержимого.
+func TestChatStopsOnTerminalFinish(t *testing.T) {
+	t.Parallel()
+
+	usage := llm.Usage{BillableInput: 12, Output: 30, Known: true}
+
+	for _, tc := range []struct {
+		step    step
+		outcome string
+		want    error
+	}{
+		{
+			step:    step{res: llm.Result{Text: "{", Usage: usage, Finish: llm.Finish{Raw: "length", Kind: llm.FinishLength}}},
+			outcome: llm.OutcomeTruncated,
+			want:    llm.ErrTruncated,
+		},
+		{
+			step: step{err: &llm.ResponseError{
+				Message: "пусто", Usage: usage, Finish: llm.Finish{Raw: "blacklist", Kind: llm.FinishContentFilter},
+			}},
+			outcome: llm.OutcomeFiltered,
+			want:    llm.ErrFiltered,
+		},
+	} {
+		f := &fake{steps: []step{tc.step, ok("never", 0, 0)}}
+		obs := &recorder{}
+
+		_, err := client(f, obs).Chat(context.Background(), req())
+
+		call := callError(t, err)
+		if f.count() != 1 || call.Class != llm.RetryNever || llm.Recoverable(err) || !errors.Is(err, tc.want) {
+			t.Errorf("%s: попыток %d, ошибка %+v", tc.outcome, f.count(), call)
+		}
+
+		if call.Report.Outcome != tc.outcome || call.Report.Usage.Output != 30 || call.Finish.Kind == "" ||
+			obs.attempts[0].Outcome != tc.outcome || obs.attempts[0].Finish != call.Finish {
+			t.Errorf("%s: отчёт %+v, попытка %+v", tc.outcome, call.Report, obs.attempts[0])
+		}
+	}
+}
+
+// TestChatRejectsUnconfirmedCapabilities — сверх профиля плеча запрос не уходит: класс never,
+// плечо не зовётся; неизвестный профиль пропускает только текст без опций.
+func TestChatRejectsUnconfirmedCapabilities(t *testing.T) {
+	t.Parallel()
+
+	img := llm.Image{MIME: "image/png", Data: []byte{1}}
+	one := llm.Message{Role: llm.RoleUser, Images: []llm.Image{img}}
+	two := []llm.Message{{Role: llm.RoleUser, Images: []llm.Image{img, img}}}
+	profile := llm.Capabilities{Vision: true, Schema: true, MaxImagesPerMessage: 1, MaxImagesPerRequest: 2}
+
+	for name, tc := range map[string]struct {
+		caps llm.Capabilities
+		req  llm.Request
+	}{
+		"vision":      {llm.Capabilities{}, llm.Request{Messages: []llm.Message{{Images: []llm.Image{img}}}}},
+		"per message": {profile, llm.Request{Messages: two}},
+		"per request": {profile, llm.Request{Messages: []llm.Message{one, one, one}}},
+		"json":        {profile, llm.Request{Output: llm.Output{Mode: llm.ModeJSON}}},
+		"strict": {profile, llm.Request{
+			Output: llm.Output{Mode: llm.ModeSchema, Schema: json.RawMessage(`{}`), Strict: true},
+		}},
+		"temperature": {profile, llm.Request{Options: llm.Options{Temperature: llm.Ptr(0.2)}}},
+		"reasoning":   {profile, llm.Request{Options: llm.Options{Reasoning: llm.EffortLow}}},
+		"max output":  {profile, llm.Request{Options: llm.Options{MaxOutputTokens: 100}}},
+	} {
+		f := &fake{steps: []step{ok("never", 0, 0)}, caps: &tc.caps}
+		tc.req.Model = "m"
+
+		_, err := client(f, nil).Chat(context.Background(), tc.req)
+
+		var request *llm.RequestError
+		if call := callError(t, err); call.Class != llm.RetryNever || f.count() != 0 || !errors.As(err, &request) ||
+			call.Report.Outcome != llm.OutcomeBadRequest {
+			t.Errorf("%s: %v, вызовов плеча %d", name, err, f.count())
+		}
+	}
+
+	f := &fake{steps: []step{ok("fits", 0, 0)}, caps: &profile}
+	fits := llm.Request{Model: "m", Messages: []llm.Message{one, one}}
+
+	if _, err := client(f, nil).Chat(context.Background(), fits); err != nil {
+		t.Errorf("запрос в пределах профиля: %v", err)
+	}
+
+	unknown := &unprofiled{fake{steps: []step{ok("text", 0, 0)}}}
+	if _, err := llm.New(unknown, time.Second).Chat(context.Background(), req()); err != nil {
+		t.Errorf("текст при неизвестном профиле: %v", err)
+	}
+
+	jsonReq := req()
+	jsonReq.Output.Mode = llm.ModeJSON
+
+	if _, err := llm.New(unknown, time.Second).Chat(context.Background(), jsonReq); err == nil || unknown.count() != 1 {
+		t.Errorf("json при неизвестном профиле: %v, вызовов %d", err, unknown.count())
+	}
+}
+
+// unprofiled — плечо, не знающее профиля модели.
+type unprofiled struct{ fake }
+
+func (*unprofiled) Capabilities(string) (llm.Capabilities, bool) {
+	return llm.Capabilities{Vision: true, JSON: true}, false
+}
+
+// TestChatCarriesAttemptReports — результат и отказ несут начало вызова и отчёты попыток
+// с идентификатором запроса поставщика — и из ответа, и из не-2xx.
+func TestChatCarriesAttemptReports(t *testing.T) {
+	t.Parallel()
+
+	failed := step{err: &llm.StatusError{Status: 502, RequestID: "r1"}}
+	done := ok("done", 1, 1)
+	done.res.RequestID = "r2"
+	f := &fake{steps: []step{failed, done}}
+	before := time.Now()
+
+	res, err := client(f, nil).Chat(context.Background(), req())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(res.Attempts) != 2 || res.Attempts[0].RequestID != "r1" || res.Attempts[1].RequestID != "r2" ||
+		res.RequestID != "r2" || res.StartedAt.Before(before) || res.Attempts[1].StartedAt.Before(res.StartedAt) ||
+		res.Attempts[1].Attempt != 2 {
+		t.Errorf("отчёты попыток %+v, начало %s", res.Attempts, res.StartedAt)
+	}
+
+	f = &fake{steps: []step{failed}}
+	c := client(f, nil)
+	c.Attempts = 1
+
+	_, err = c.Chat(context.Background(), req())
+	if call := callError(t, err); len(call.Attempts) != 1 || call.Attempts[0].RequestID != "r1" ||
+		call.StartedAt.IsZero() {
+		t.Errorf("отказ %+v", call)
+	}
+}
+
+// TestChatConcurrentReportsStayApart — конкурентные вызовы одного клиента не смешивают отчёты попыток.
+func TestChatConcurrentReportsStayApart(t *testing.T) {
+	t.Parallel()
+
+	c := client(&fake{steps: []step{status(500, 0), status(500, 0), ok("done", 1, 1)}}, nil)
+
+	var wg sync.WaitGroup
+
+	for i := range 20 {
+		wg.Go(func() {
+			r := req()
+			r.CallID = strconv.Itoa(i)
+
+			res, err := c.Chat(context.Background(), r)
+			if err != nil {
+				return
+			}
+
+			for _, a := range res.Attempts {
+				if a.CallID != r.CallID {
+					t.Errorf("вызов %s получил попытку %s", r.CallID, a.CallID)
+				}
+			}
+
+			if len(res.Attempts) != res.Report.Attempts {
+				t.Errorf("вызов %s: попыток %d, в отчёте %d", r.CallID, len(res.Attempts), res.Report.Attempts)
+			}
+		})
+	}
+
+	wg.Wait()
 }
 
 // TestArithmeticSaturates — чрезмерный Retry-After, бюджет и сдвиг паузы не переполняются.

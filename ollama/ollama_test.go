@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -54,10 +55,18 @@ func TestCompleteReadsEnvelope(t *testing.T) {
 	}
 
 	want := llm.Result{
-		Model: "m:latest", Text: `{"a":1}`, FinishReason: "stop",
-		Usage: llm.Usage{InputTokens: 12, OutputTokens: 7, Known: true}, ServerLatency: 1500 * time.Millisecond,
+		Model:  "m:latest",
+		Text:   `{"a":1}`,
+		Finish: llm.Finish{Raw: "stop", Kind: llm.FinishStop},
+		Usage: llm.Usage{
+			Raw:           map[string]int{"prompt_eval_count": 12, "eval_count": 7},
+			BillableInput: 12,
+			Output:        7,
+			Known:         true,
+		},
+		ServerLatency: 1500 * time.Millisecond,
 	}
-	if res != want {
+	if !reflect.DeepEqual(res, want) {
 		t.Errorf("результат %+v, ожидался %+v", res, want)
 	}
 }
@@ -80,8 +89,8 @@ func TestCompleteEncodesRequest(t *testing.T) {
 			{Role: llm.RoleSystem, Text: "rules"},
 			{Role: llm.RoleUser, Text: "data", Images: []llm.Image{{MIME: "image/png", Data: []byte{1, 2, 3}}}},
 		},
-		Output:      llm.Output{Mode: llm.ModeSchema, Schema: json.RawMessage(`{"type":"object"}`)},
-		Temperature: llm.Ptr(0.1),
+		Output:  llm.Output{Mode: llm.ModeSchema, Schema: json.RawMessage(`{"type":"object"}`)},
+		Options: llm.Options{Temperature: llm.Ptr(0.1), MaxOutputTokens: 256},
 	}
 
 	if _, err := p.Complete(context.Background(), req); err != nil {
@@ -112,7 +121,7 @@ func TestCompleteEncodesRequest(t *testing.T) {
 		t.Errorf("format %v", got["format"])
 	}
 
-	if opts, _ := got["options"].(map[string]any); opts["temperature"] != 0.1 {
+	if opts, _ := got["options"].(map[string]any); opts["temperature"] != 0.1 || opts["num_predict"] != 256.0 {
 		t.Errorf("options %v", got["options"])
 	}
 }
@@ -256,7 +265,7 @@ func TestCompleteUsageKnownOnlyWithCounters(t *testing.T) {
 	_, err = p.Complete(context.Background(), llm.Request{Model: "m"})
 
 	var response *llm.ResponseError
-	if !errors.As(err, &response) || response.Usage.InputTokens != 12 || !response.Usage.Known {
+	if !errors.As(err, &response) || response.Usage.BillableInput != 12 || !response.Usage.Known {
 		t.Errorf("расход при пустом содержимом потерян: %v", err)
 	}
 
@@ -271,7 +280,8 @@ func TestCompleteUsageKnownOnlyWithCounters(t *testing.T) {
 	})
 
 	res, err = p.Complete(context.Background(), llm.Request{Model: "m"})
-	if err != nil || res.Usage.Known || res.Usage.InputTokens != 0 || res.Usage.OutputTokens != 7 {
+	if err != nil || res.Usage.Known || res.Usage.BillableInput != 0 || res.Usage.Output != 7 ||
+		res.Usage.Raw["prompt_eval_count"] != -1 {
 		t.Errorf("отрицательный счётчик: %+v, %v", res.Usage, err)
 	}
 }
@@ -293,5 +303,77 @@ func TestCompleteKeepsDeadlineWhileReadingBody(t *testing.T) {
 	_, err := p.Complete(ctx, llm.Request{Model: "m"})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("причина потеряна: %v", err)
+	}
+}
+
+// TestClientStopsOnLength — done_reason length оплачен: клиент не повторяет, расход в отчёте,
+// даже когда обрезанный ответ пуст.
+func TestClientStopsOnLength(t *testing.T) {
+	t.Parallel()
+
+	for _, content := range []string{`{"a":`, ""} {
+		calls := 0
+
+		p := server(t, func(w http.ResponseWriter, _ *http.Request) {
+			calls++
+
+			reply(w, map[string]any{
+				"done": true, "done_reason": "length", "message": map[string]any{"content": content},
+				"prompt_eval_count": 5, "eval_count": 64,
+			})
+		})
+
+		c := llm.New(p, time.Second)
+		c.Pause = time.Millisecond
+
+		_, err := c.Chat(context.Background(), llm.Request{Model: "m", Output: llm.Output{Mode: llm.ModeJSON}})
+
+		var call *llm.CallError
+		if !errors.As(err, &call) || !errors.Is(err, llm.ErrTruncated) || calls != 1 ||
+			call.Report.Outcome != llm.OutcomeTruncated || call.Report.Usage.Output != 64 {
+			t.Errorf("%q: ошибка %v, запросов %d", content, err, calls)
+		}
+	}
+}
+
+// TestFinishNormalized — load и unload демона не причина конца генерации.
+func TestFinishNormalized(t *testing.T) {
+	t.Parallel()
+
+	for raw, want := range map[string]llm.FinishKind{"stop": llm.FinishStop, "length": llm.FinishLength, "unload": ""} {
+		p := server(t, func(w http.ResponseWriter, _ *http.Request) {
+			reply(w, map[string]any{"done": true, "done_reason": raw, "message": map[string]any{"content": "ok"}})
+		})
+
+		res, err := p.Complete(context.Background(), llm.Request{Model: "m"})
+		if err != nil || res.Finish != (llm.Finish{Raw: raw, Kind: want}) {
+			t.Errorf("%s: %+v, %v", raw, res.Finish, err)
+		}
+	}
+}
+
+// TestCapabilities — профиль протокола: кадры, json и схема есть, рассуждений нет,
+// и клиент отбивает их до демона.
+func TestCapabilities(t *testing.T) {
+	t.Parallel()
+
+	calls := 0
+
+	p := server(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+
+		reply(w, map[string]any{"done": true, "message": map[string]any{"content": "ok"}})
+	})
+
+	caps, known := p.Capabilities("any")
+	if !known || !caps.Vision || !caps.Schema || caps.Reasoning {
+		t.Errorf("профиль %+v, известен %v", caps, known)
+	}
+
+	req := llm.Request{Model: "m", Options: llm.Options{Reasoning: llm.EffortHigh}}
+	if _, err := llm.New(p, time.Second).
+		Chat(context.Background(), req); err == nil || llm.Recoverable(err) ||
+		calls != 0 {
+		t.Errorf("рассуждения ушли демону: %v, запросов %d", err, calls)
 	}
 }

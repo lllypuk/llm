@@ -36,6 +36,7 @@ type StatusError struct {
 	Message    string
 	RetryAfter time.Duration
 	Phase      Phase
+	RequestID  string
 }
 
 func (e *StatusError) Error() string {
@@ -53,6 +54,8 @@ type ResponseError struct {
 	Message       string
 	Usage         Usage
 	Model         string
+	Finish        Finish
+	RequestID     string
 	ServerLatency time.Duration
 	Err           error
 }
@@ -93,6 +96,13 @@ func (e *PhaseError) Error() string { return string(e.Phase) + ": " + e.Err.Erro
 
 func (e *PhaseError) Unwrap() error { return e.Err }
 
+// ErrTruncated и ErrFiltered — генерация кончилась пределом длины или фильтром: ответ
+// оплачен, и повтор оплатил бы тот же исход ещё раз.
+var (
+	ErrTruncated = errors.New("ответ обрезан пределом длины")
+	ErrFiltered  = errors.New("ответ остановлен фильтром")
+)
+
 // CallError — отказ вызова целиком, с решением о повторе, потраченным временем
 // и тем же отчётом, что получает наблюдатель.
 type CallError struct {
@@ -101,11 +111,13 @@ type CallError struct {
 	Phase      Phase
 	Status     int // код HTTP; 0 — ответа не было (сеть, просрочка, отмена)
 	Message    string
-	Attempts   int
 	RetryAfter time.Duration
+	Finish     Finish
+	StartedAt  time.Time
 	Latency    time.Duration
 	Class      RetryClass
 	Report     CallReport
+	Attempts   []AttemptReport
 	Err        error
 }
 
@@ -121,8 +133,8 @@ func (e *CallError) Error() string {
 		head += ": " + e.Err.Error()
 	}
 
-	if e.Attempts > 1 {
-		head += fmt.Sprintf(" (попыток %d)", e.Attempts)
+	if len(e.Attempts) > 1 {
+		head += fmt.Sprintf(" (попыток %d)", len(e.Attempts))
 	}
 
 	return head
@@ -149,12 +161,11 @@ func Latency(err error) time.Duration {
 
 // classify переводит отказ попытки в класс. 429 — после паузы; ключ, баланс и
 // отсутствующая модель — к оператору; прочие 4xx и негодный запрос повторятся тем же.
-func classify(provider, model string, attempt int, err error) *CallError {
+func classify(provider, model string, err error) *CallError {
 	fail := &CallError{
 		Provider: provider,
 		Model:    model,
 		Phase:    phaseOf(err),
-		Attempts: attempt,
 		Class:    RetryImmediate,
 		Err:      err,
 	}
@@ -208,14 +219,28 @@ func phaseOf(err error) Phase {
 	return PhaseInference
 }
 
-// metaOf — метаданные попытки, кончившейся отказом: конверт был, содержимое негодно.
-func metaOf(err error) (Usage, string, time.Duration) {
-	var response *ResponseError
-	if errors.As(err, &response) {
-		return response.Usage, response.Model, response.ServerLatency
+// terminalFinish — отказ по причине конца генерации: обрезанный и отфильтрованный ответ не повторяется.
+func terminalFinish(provider, model string, finish Finish) *CallError {
+	var err error
+
+	switch finish.Kind {
+	case FinishLength:
+		err = ErrTruncated
+	case FinishContentFilter:
+		err = ErrFiltered
+	case "", FinishStop, FinishRefusal, FinishToolCall:
+		return nil
 	}
 
-	return Usage{}, "", 0
+	return &CallError{
+		Provider: provider,
+		Model:    model,
+		Phase:    PhaseInference,
+		Message:  err.Error(),
+		Finish:   finish,
+		Class:    RetryNever,
+		Err:      err,
+	}
 }
 
 // errProviderMissing — клиент собран без плеча.

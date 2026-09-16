@@ -71,7 +71,8 @@ func (c *Client) Budget() time.Duration {
 }
 
 // Chat вызывает модель, повторяя отказы классов [RetryImmediate] и [RetryAfterDelay]
-// в пределах числа попыток и потолка ожидания. Негодный запрос отбивается до плеча.
+// в пределах числа попыток и потолка ожидания. Негодный запрос и запрос сверх
+// профиля плеча отбиваются до вызова; обрезанный и отфильтрованный ответ — [RetryNever].
 func (c *Client) Chat(ctx context.Context, req Request) (Result, error) {
 	run := &call{client: c, req: req, started: time.Now(), spent: Usage{Known: true}}
 
@@ -81,7 +82,7 @@ func (c *Client) Chat(ctx context.Context, req Request) (Result, error) {
 
 	run.provider = c.Provider.Name()
 
-	if err := req.Validate(); err != nil {
+	if err := c.admit(req); err != nil {
 		run.outcome = OutcomeBadRequest
 
 		return Result{}, run.fail(&CallError{
@@ -92,7 +93,22 @@ func (c *Client) Chat(ctx context.Context, req Request) (Result, error) {
 	return run.do(ctx)
 }
 
-// call — состояние одного вызова: расход по попыткам, модель из последнего конверта, отчёт.
+// admit — запрос собираем и профиль плеча его подтверждает; неизвестный профиль не подтверждает ничего.
+func (c *Client) admit(req Request) error {
+	if err := req.Validate(); err != nil {
+		return err
+	}
+
+	caps, known := c.Provider.Capabilities(req.Model)
+	if !known {
+		caps = Capabilities{}
+	}
+
+	return caps.Check(req)
+}
+
+// call — состояние одного вызова: расход и отчёты попыток, модель из последнего конверта.
+// Отчёты живут в вызове, а не в клиенте: конкурентные вызовы одного клиента их не смешивают.
 type call struct {
 	client   *Client
 	provider string
@@ -101,6 +117,7 @@ type call struct {
 	spent    Usage
 	model    string
 	outcome  string
+	attempts []AttemptReport
 }
 
 func (r *call) do(ctx context.Context) (Result, error) {
@@ -108,21 +125,29 @@ func (r *call) do(ctx context.Context) (Result, error) {
 	attempts := c.attempts()
 
 	for attempt := 1; ; attempt++ {
+		started := time.Now()
 		res, err := c.once(ctx, r.req)
-		usage, model, server := attemptMeta(res, err)
-		r.spent = r.spent.Add(usage)
+		meta := attemptMetaOf(res, err)
+		r.spent = r.spent.Add(meta.usage)
 
-		if model != "" {
-			r.model = model
+		if meta.model != "" {
+			r.model = meta.model
 		}
 
-		r.observeAttempt(ctx, attempt, res, err, usage, model, server)
+		outcome := attemptOutcome(ctx, err, meta.finish)
+		r.observeAttempt(attempt, started, res.Latency, outcome, err, meta)
+
+		if fail := terminalFinish(r.provider, r.req.Model, meta.finish); fail != nil {
+			r.outcome = outcome
+
+			return Result{}, r.fail(fail)
+		}
 
 		if err == nil {
-			return r.succeed(attempt, res), nil
+			return r.succeed(res), nil
 		}
 
-		fail := classify(r.provider, r.req.Model, attempt, err)
+		fail := classify(r.provider, r.req.Model, err)
 
 		// Просьба дольше потолка — «сегодня не обслужим»: класс меняется до проверки числа попыток,
 		// иначе на последней очередь получила бы immediate и повторила раньше разрешённого.
@@ -145,7 +170,7 @@ func (r *call) do(ctx context.Context) (Result, error) {
 }
 
 // report — отчёт вызова; model — из удавшегося ответа как есть, у отказа — из последнего конверта.
-func (r *call) report(outcome string, class RetryClass, attempts int, model string) CallReport {
+func (r *call) report(outcome string, class RetryClass, model string) CallReport {
 	return CallReport{
 		CallID:         r.req.CallID,
 		Provider:       r.provider,
@@ -154,34 +179,42 @@ func (r *call) report(outcome string, class RetryClass, attempts int, model stri
 		Task:           r.req.Task,
 		Outcome:        outcome,
 		Class:          class,
-		Attempts:       attempts,
+		Attempts:       len(r.attempts),
 		Duration:       time.Since(r.started),
 		Usage:          r.spent,
 	}
 }
 
 func (r *call) observeAttempt(
-	ctx context.Context, attempt int, res Result, err error, usage Usage, model string, server time.Duration,
+	attempt int, started time.Time, duration time.Duration, outcome string, err error, meta attemptMeta,
 ) {
-	r.client.observer().Attempt(AttemptReport{
+	report := AttemptReport{
 		CallID:         r.req.CallID,
 		Attempt:        attempt,
 		Provider:       r.provider,
 		RequestedModel: r.req.Model,
-		Model:          model,
+		Model:          meta.model,
 		Task:           r.req.Task,
-		Outcome:        attemptOutcome(ctx, err),
+		Outcome:        outcome,
 		Phase:          phaseOf(err),
-		Duration:       res.Latency,
-		ServerLatency:  server,
-		Usage:          usage,
-	})
+		RequestID:      meta.requestID,
+		Finish:         meta.finish,
+		StartedAt:      started,
+		Duration:       duration,
+		ServerLatency:  meta.server,
+		Usage:          meta.usage,
+	}
+
+	r.attempts = append(r.attempts, report)
+	r.client.observer().Attempt(report)
 }
 
 // succeed — отчёт несёт модель из ответа как есть; подстановка запрошенной — только в Result.
-func (r *call) succeed(attempt int, res Result) Result {
-	res.Report = r.report(OutcomeOK, "", attempt, res.Model)
+func (r *call) succeed(res Result) Result {
+	res.Report = r.report(OutcomeOK, "", res.Model)
+	res.StartedAt = r.started
 	res.Latency = res.Report.Duration
+	res.Attempts = r.attempts
 	r.client.observer().Call(res.Report)
 
 	if res.Model == "" {
@@ -197,8 +230,10 @@ func (r *call) fail(fail *CallError) *CallError {
 		outcome = r.outcome
 	}
 
-	fail.Report = r.report(outcome, fail.Class, fail.Attempts, r.model)
+	fail.Report = r.report(outcome, fail.Class, r.model)
+	fail.StartedAt = r.started
 	fail.Latency = fail.Report.Duration
+	fail.Attempts = r.attempts
 	r.client.observer().Call(fail.Report)
 
 	return fail
@@ -216,13 +251,40 @@ func (c *Client) once(ctx context.Context, req Request) (Result, error) {
 	return res, err
 }
 
-// attemptMeta — расход, модель и серверное время попытки: у отказа — из конверта, если он был.
-func attemptMeta(res Result, err error) (Usage, string, time.Duration) {
-	if err != nil {
-		return metaOf(err)
+// attemptMeta — что известно о попытке из конверта поставщика.
+type attemptMeta struct {
+	usage     Usage
+	model     string
+	requestID string
+	finish    Finish
+	server    time.Duration
+}
+
+// attemptMetaOf — у отказа метаданные из конверта, если он был: негодное содержимое или не-2xx.
+func attemptMetaOf(res Result, err error) attemptMeta {
+	if err == nil {
+		return attemptMeta{
+			usage: res.Usage, model: res.Model, requestID: res.RequestID, finish: res.Finish, server: res.ServerLatency,
+		}
 	}
 
-	return res.Usage, res.Model, res.ServerLatency
+	var response *ResponseError
+	if errors.As(err, &response) {
+		return attemptMeta{
+			usage:     response.Usage,
+			model:     response.Model,
+			requestID: response.RequestID,
+			finish:    response.Finish,
+			server:    response.ServerLatency,
+		}
+	}
+
+	var status *StatusError
+	if errors.As(err, &status) {
+		return attemptMeta{requestID: status.RequestID}
+	}
+
+	return attemptMeta{}
 }
 
 func (c *Client) observer() Observer {

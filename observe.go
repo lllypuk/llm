@@ -10,6 +10,8 @@ import (
 // Исходы попытки — про транспорт и годность конверта, а не про контракт модели.
 const (
 	OutcomeOK          = "ok"
+	OutcomeTruncated   = "truncated"
+	OutcomeFiltered    = "filtered"
 	OutcomeCancelled   = "cancelled"
 	OutcomeTimeout     = "timeout"
 	OutcomeHTTP4xx     = "http_4xx"
@@ -20,7 +22,7 @@ const (
 	OutcomeError       = "error"
 )
 
-// AttemptReport — одна попытка. Model — имя из ответа, когда поставщик его назвал.
+// AttemptReport — одна попытка. Model и RequestID — из ответа, когда поставщик их назвал.
 type AttemptReport struct {
 	CallID         string
 	Attempt        int
@@ -30,6 +32,9 @@ type AttemptReport struct {
 	Task           string
 	Outcome        string
 	Phase          Phase
+	RequestID      string
+	Finish         Finish
+	StartedAt      time.Time
 	Duration       time.Duration
 	ServerLatency  time.Duration
 	Usage          Usage
@@ -63,8 +68,9 @@ func (noopObserver) Attempt(AttemptReport) {}
 
 func (noopObserver) Call(CallReport) {}
 
-// attemptOutcome называет исход попытки: срок и отмена снаружи — cancelled, свой срок — timeout.
-func attemptOutcome(ctx context.Context, err error) string {
+// attemptOutcome называет исход попытки: срок и отмена снаружи — cancelled, свой срок — timeout;
+// обрезанный и отфильтрованный ответ — свои исходы, даже если содержимое негодно.
+func attemptOutcome(ctx context.Context, err error, finish Finish) string {
 	var status *StatusError
 
 	var response *ResponseError
@@ -72,6 +78,10 @@ func attemptOutcome(ctx context.Context, err error) string {
 	var request *RequestError
 
 	switch {
+	case finish.Kind == FinishLength:
+		return OutcomeTruncated
+	case finish.Kind == FinishContentFilter:
+		return OutcomeFiltered
 	case err == nil:
 		return OutcomeOK
 	case ctx.Err() != nil:
