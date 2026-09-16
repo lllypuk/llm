@@ -321,7 +321,7 @@ func TestBudgetCoversEveryAttempt(t *testing.T) {
 	}
 }
 
-// TestRetryAfter — секунды, HTTP-дата, мусор и отрицательное.
+// TestRetryAfter — экспортированный разбор для внешних адаптеров; формы проверяет httpjson.
 func TestRetryAfter(t *testing.T) {
 	t.Parallel()
 
@@ -330,18 +330,6 @@ func TestRetryAfter(t *testing.T) {
 
 	if got := llm.RetryAfter(h); got != 7*time.Second {
 		t.Errorf("секунды: %s", got)
-	}
-
-	h.Set("Retry-After", time.Now().Add(time.Minute).UTC().Format(http.TimeFormat))
-	if got := llm.RetryAfter(h); got < 50*time.Second || got > time.Minute {
-		t.Errorf("дата: %s", got)
-	}
-
-	for _, raw := range []string{"", "мусор", "-5", time.Now().Add(-time.Minute).UTC().Format(http.TimeFormat)} {
-		h.Set("Retry-After", raw)
-		if got := llm.RetryAfter(h); got != 0 {
-			t.Errorf("%q: %s", raw, got)
-		}
 	}
 }
 
@@ -719,24 +707,9 @@ func TestChatConcurrentReportsStayApart(t *testing.T) {
 	wg.Wait()
 }
 
-// TestArithmeticSaturates — чрезмерный Retry-After, бюджет и сдвиг паузы не переполняются.
+// TestArithmeticSaturates — бюджет и сдвиг паузы не переполняются.
 func TestArithmeticSaturates(t *testing.T) {
 	t.Parallel()
-
-	h := http.Header{}
-
-	for _, raw := range []string{"9223372037", "9223372036854775808", "99999999999999999999999"} {
-		h.Set("Retry-After", raw)
-
-		if got := llm.RetryAfter(h); got < time.Hour {
-			t.Errorf("Retry-After %s переполнился: %s", raw, got)
-		}
-	}
-
-	h.Set("Retry-After", "-9223372036854775808")
-	if got := llm.RetryAfter(h); got != 0 {
-		t.Errorf("отрицательное переполнение: %s", got)
-	}
 
 	c := llm.New(&fake{}, 1<<62)
 	c.Attempts = 3

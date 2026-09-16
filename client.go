@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"math"
 	"net/http"
-	"strconv"
-	"strings"
 	"time"
+
+	"github.com/lllypuk/llm/internal/httpjson"
 )
 
 // durationBits — разрядность time.Duration: сдвиг на неё и больше даёт ноль.
@@ -355,28 +355,7 @@ func (c *Client) retryPause(attempt int, retryAfter time.Duration) time.Duration
 
 // RetryAfter разбирает заголовок в обеих формах: секунды числом и HTTP-дата.
 // Отсутствующий, непонятный и отрицательный — ноль; чрезмерный насыщается.
-func RetryAfter(h http.Header) time.Duration {
-	raw := strings.TrimSpace(h.Get("Retry-After"))
-	if raw == "" {
-		return 0
-	}
-
-	secs, err := strconv.ParseInt(raw, 10, 64)
-
-	switch {
-	case err == nil:
-		return mulDuration(time.Second, clampInt(secs))
-	case errors.Is(err, strconv.ErrRange) && !strings.HasPrefix(raw, "-"):
-		return math.MaxInt64
-	}
-
-	at, dateErr := http.ParseTime(raw)
-	if dateErr != nil {
-		return 0
-	}
-
-	return max(time.Until(at), 0)
-}
+func RetryAfter(h http.Header) time.Duration { return httpjson.RetryAfter(h) }
 
 // sleep ждёт паузу, но не дольше контекста.
 func sleep(ctx context.Context, d time.Duration) error {
@@ -419,18 +398,6 @@ func addDuration(a, b time.Duration) time.Duration {
 	}
 
 	return a + b
-}
-
-// clampInt — int64 в int без переполнения; отрицательное — ноль.
-func clampInt(v int64) int {
-	switch {
-	case v <= 0:
-		return 0
-	case v > math.MaxInt:
-		return math.MaxInt
-	default:
-		return int(v)
-	}
 }
 
 // saturate — сумма счётчиков; переполнение и отрицательные слагаемые делают её неточной.

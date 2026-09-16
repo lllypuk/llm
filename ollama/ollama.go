@@ -3,16 +3,15 @@
 package ollama
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/lllypuk/llm"
+	"github.com/lllypuk/llm/internal/httpjson"
 )
 
 // Name — имя плеча в отчётах и журнале.
@@ -145,19 +144,12 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (llm.Result, e
 		return llm.Result{}, err
 	}
 
-	body, err := json.Marshal(p.encode(req))
-	if err != nil {
-		return llm.Result{}, &llm.RequestError{Message: "сборка запроса", Err: err}
-	}
-
 	url := p.Host + "/api/chat"
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	httpReq, err := httpjson.NewRequest(ctx, url, p.encode(req), nil)
 	if err != nil {
 		return llm.Result{}, &llm.RequestError{Message: "запрос " + url, Err: err}
 	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := p.client().Do(httpReq)
 	if err != nil {
@@ -167,15 +159,13 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (llm.Result, e
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return llm.Result{}, &llm.StatusError{
-			Status:     resp.StatusCode,
-			Message:    errorMessage(resp.Body),
-			RetryAfter: llm.RetryAfter(resp.Header),
-		}
+		st := httpjson.ReadStatus(resp, maxErrorBody, errorMessage)
+
+		return llm.Result{}, &llm.StatusError{Status: st.Code, Message: st.Message, RetryAfter: st.RetryAfter}
 	}
 
-	env, err := decode(resp.Body)
-	if err != nil {
+	var env response
+	if err = httpjson.Decode(resp.Body, maxBody, &env); err != nil {
 		return llm.Result{}, &llm.ResponseError{Message: "ответ " + url, Err: err}
 	}
 
@@ -195,26 +185,6 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (llm.Result, e
 		Usage:         env.usage(),
 		ServerLatency: time.Duration(env.TotalDuration),
 	}, nil
-}
-
-// decode читает ровно один конверт: тело длиннее предела и любой хвост после
-// объекта — отказ (Unmarshal, не Decoder), иначе первый фрагмент потока прошёл бы за ответ.
-func decode(r io.Reader) (response, error) {
-	raw, err := io.ReadAll(io.LimitReader(r, maxBody+1))
-	if err != nil {
-		return response{}, err
-	}
-
-	if len(raw) > maxBody {
-		return response{}, fmt.Errorf("тело длиннее %d байт", maxBody)
-	}
-
-	var env response
-	if err = json.Unmarshal(raw, &env); err != nil {
-		return response{}, fmt.Errorf("конверт: %w", err)
-	}
-
-	return env, nil
 }
 
 func (p *Provider) encode(req llm.Request) request {
@@ -252,22 +222,15 @@ func (p *Provider) client() *http.Client {
 	return http.DefaultClient
 }
 
-// errorMessage достаёт текст из конверта `{"error": "..."}`; не-JSON отдаётся обрезанным как есть.
-func errorMessage(r io.Reader) string {
-	raw, err := io.ReadAll(io.LimitReader(r, maxErrorBody))
-	if err != nil || len(raw) == 0 {
-		return ""
-	}
-
+// errorMessage — текст конверта `{"error": "..."}`.
+func errorMessage(raw []byte) string {
 	var body struct {
 		Error string `json:"error"`
 	}
 
-	if unmarshalErr := json.Unmarshal(raw, &body); unmarshalErr == nil && body.Error != "" {
-		return body.Error
-	}
+	_ = json.Unmarshal(raw, &body)
 
-	return strings.TrimSpace(string(raw))
+	return body.Error
 }
 
 var _ llm.Provider = (*Provider)(nil)
