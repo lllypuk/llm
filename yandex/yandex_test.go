@@ -374,7 +374,7 @@ func TestRejectedBeforeNetwork(t *testing.T) {
 		"пустой ключ": {
 			req:   llm.Request{Model: "yandexgpt", Messages: text},
 			creds: yandex.APIKey(""),
-			class: llm.RetryImmediate,
+			class: llm.RetryNeedsConfiguration,
 			phase: llm.PhaseAuth,
 		},
 	}

@@ -258,6 +258,8 @@ type generating struct {
 
 func (g *generating) Name() string { return gigachat.Name }
 
+func (*generating) AttemptOverhead() time.Duration { return 0 }
+
 func (g *generating) Capabilities(string) (llm.Capabilities, bool) {
 	return llm.Capabilities{
 		Vision:              true,

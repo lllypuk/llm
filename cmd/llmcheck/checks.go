@@ -49,6 +49,9 @@ const (
 	fieldOK      = "ok"
 	fieldColor   = "color"
 	fieldAnswer  = "answer"
+	typeBoolean  = "boolean"
+	typeString   = "string"
+	typeInteger  = "integer"
 	wantColorRU  = "красн"
 	wantColorEN  = "red"
 	wantProduct  = "391"
@@ -120,15 +123,6 @@ func (c counted) Complete(ctx context.Context, req llm.Request) (llm.Result, err
 	}
 
 	return c.Provider.Complete(ctx, req)
-}
-
-// AttemptOverhead — накладные обёрнутого плеча: обёртка не должна прятать их от Route.Budget.
-func (c counted) AttemptOverhead() time.Duration {
-	if o, ok := c.Provider.(llm.AttemptOverhead); ok {
-		return o.AttemptOverhead()
-	}
-
-	return 0
 }
 
 type runner struct {
@@ -227,14 +221,14 @@ func (r *runner) add(res result) {
 	}
 }
 
+// overBudget — потолок расхода достигнут: следующая проверка не начнётся.
 func (r *runner) overBudget() bool {
-	for _, amount := range r.spent {
-		if amount >= r.maxCost {
-			return true
-		}
-	}
+	return slices.ContainsFunc(slices.Collect(maps.Values(r.spent)), func(v int64) bool { return v >= r.maxCost })
+}
 
-	return false
+// overspent — потолок перелетел: вызов, начатый под ним, со всеми повторами оплачен целиком.
+func (r *runner) overspent() bool {
+	return slices.ContainsFunc(slices.Collect(maps.Values(r.spent)), func(v int64) bool { return v > r.maxCost })
 }
 
 // dedupe — та же проверка того же маршрута уже прошла у другой задачи: платить второй раз незачем.
@@ -260,12 +254,16 @@ func (r *runner) checkModel(ctx context.Context, task string) result {
 		return dup
 	}
 
-	msgs := []llm.Message{{Role: llm.RoleUser, Text: prompt(desc.Output.Mode, fieldOK, "Проверка связи: ответь true.")}}
-	res, err := route.Chat(ctx, input(desc, msgs, fieldOK, "boolean"))
+	msgs := []llm.Message{{
+		Role: llm.RoleUser,
+		Text: prompt(desc.Output.Mode, fieldOK, typeBoolean, "Проверка связи: ответь true."),
+	}}
+	res, err := route.Chat(ctx, input(desc, msgs, fieldOK, typeBoolean))
 
 	out := r.verdict(checkModel, task, res, err)
 	if err == nil {
-		out.expect(answerHas(desc.Output.Mode, res.Text, fieldOK, "true"), "ответ не содержит ok=true")
+		isTrue := func(v any) bool { return v == true }
+		out.expect(answerMatches(desc.Output.Mode, res.Text, fieldOK, isTrue, "true"), "ответ не ok=true")
 	}
 
 	return out
@@ -295,14 +293,19 @@ func (r *runner) checkVision(ctx context.Context, task string) result {
 
 	msgs := []llm.Message{{
 		Role:   llm.RoleUser,
-		Text:   prompt(desc.Output.Mode, fieldColor, "Какого цвета кадр? Назови цвет одним словом."),
+		Text:   prompt(desc.Output.Mode, fieldColor, typeString, "Какого цвета кадр? Назови цвет одним словом."),
 		Images: []llm.Image{img},
 	}}
-	res, err := route.Chat(ctx, input(desc, msgs, fieldColor, "string"))
+	res, err := route.Chat(ctx, input(desc, msgs, fieldColor, typeString))
 
 	out := r.verdict(checkVision, task, res, err)
 	if err == nil {
-		out.expect(answerHas(desc.Output.Mode, res.Text, fieldColor, wantColorRU, wantColorEN),
+		isRed := func(v any) bool {
+			s, ok := v.(string)
+
+			return ok && containsAny(s, wantColorRU, wantColorEN)
+		}
+		out.expect(answerMatches(desc.Output.Mode, res.Text, fieldColor, isRed, wantColorRU, wantColorEN),
 			"цвет кадра не назван: кадр не дошёл до модели")
 	}
 
@@ -326,12 +329,20 @@ func (r *runner) checkReasoning(ctx context.Context, task string) result {
 		return dup
 	}
 
-	msgs := []llm.Message{{Role: llm.RoleUser, Text: prompt(desc.Output.Mode, fieldAnswer, productQuery)}}
-	res, err := route.Chat(ctx, input(desc, msgs, fieldAnswer, "integer"))
+	msgs := []llm.Message{{Role: llm.RoleUser, Text: prompt(desc.Output.Mode, fieldAnswer, typeInteger, productQuery)}}
+	res, err := route.Chat(ctx, input(desc, msgs, fieldAnswer, typeInteger))
 
 	out := r.verdict(checkReasoning, task, res, err)
 	if err == nil {
-		out.expect(answerHas(desc.Output.Mode, res.Text, fieldAnswer, wantProduct), "неверное произведение")
+		isProduct := func(v any) bool {
+			n, ok := v.(json.Number)
+
+			return ok && n.String() == wantProduct
+		}
+		out.expect(
+			answerMatches(desc.Output.Mode, res.Text, fieldAnswer, isProduct, wantProduct),
+			"неверное произведение",
+		)
 
 		if res.Usage.Reasoning == 0 {
 			out.notes = append(out.notes, "токены рассуждений не сообщены или ноль")
@@ -341,7 +352,8 @@ func (r *runner) checkReasoning(ctx context.Context, task string) result {
 	return out
 }
 
-// checkFinish — предел ответа в один токен обязан кончиться исходом truncated с расходом, без повтора.
+// checkFinish — предел ответа в один токен обязан кончиться исходом truncated с расходом, классом never
+// и без повтора: повторы клиенту оставлены, иначе «без повтора» ничего не доказывало бы.
 func (r *runner) checkFinish(ctx context.Context, task string) result {
 	desc := r.route(task).Descriptor()
 	provider := r.router.Providers[desc.Provider]
@@ -359,10 +371,7 @@ func (r *runner) checkFinish(ctx context.Context, task string) result {
 		return dup
 	}
 
-	client := llm.New(provider, 0)
-	client.Attempts = 1
-
-	res, err := client.Chat(ctx, llm.Request{
+	res, err := llm.New(provider, 0).Chat(ctx, llm.Request{
 		CallID:   callID(),
 		Task:     task,
 		Model:    desc.Model,
@@ -373,12 +382,16 @@ func (r *runner) checkFinish(ctx context.Context, task string) result {
 	out := r.facts(task, res, err)
 	out.check, out.subject = checkFinish, task
 
+	var call *llm.CallError
+
 	switch {
-	case errors.Is(err, llm.ErrTruncated):
+	case errors.Is(err, llm.ErrTruncated) && errors.As(err, &call):
 		out.status = statusPass
+		out.expect(call.Class == llm.RetryNever, fmt.Sprintf("класс обрезанного %s, ждали never", call.Class))
+		out.expect(out.call.usage.Known && out.call.usage.OutputTokens() > 0, "у обрезанного ответа расход неизвестен")
 	case err != nil:
 		out.status = statusFail
-		out.notes = append(out.notes, "ждали truncated: "+err.Error())
+		out.notes = append(out.notes, "ждали truncated: "+failNote(err))
 	default:
 		out.status = statusFail
 		out.notes = append(out.notes, fmt.Sprintf("ответ в %d токен не обрезан", finishTokens))
@@ -523,7 +536,7 @@ func (r *runner) verdict(check, task string, res llm.Result, err error) result {
 	out.check, out.subject, out.status = check, task, statusPass
 
 	if err != nil {
-		out.fail(err.Error())
+		out.fail(failNote(err))
 
 		return out
 	}
@@ -649,10 +662,10 @@ func input(desc llm.Descriptor, msgs []llm.Message, field, typ string) llm.Input
 	return in
 }
 
-func prompt(mode llm.Mode, field, question string) string {
+func prompt(mode llm.Mode, field, typ, question string) string {
 	switch mode {
 	case llm.ModeJSON:
-		return question + " Ответь JSON-объектом с единственным полем " + field + "."
+		return question + " Ответь JSON-объектом с единственным полем " + field + " типа " + typ + "."
 	case llm.ModeSchema:
 		return question + " Ответ — в поле " + field + "."
 	case llm.ModeText:
@@ -662,27 +675,69 @@ func prompt(mode llm.Mode, field, question string) string {
 	}
 }
 
-// answerHas — значение поля у JSON-формы или текст целиком содержит одно из слов, без учёта регистра.
-func answerHas(mode llm.Mode, text, field string, wants ...string) bool {
-	value := text
-
-	if mode == llm.ModeJSON || mode == llm.ModeSchema {
-		var obj map[string]any
-		if json.Unmarshal([]byte(strings.TrimSpace(text)), &obj) != nil {
-			return false
-		}
-
-		v, ok := obj[field]
-		if !ok {
-			return false
-		}
-
-		value = fmt.Sprint(v)
+// answerMatches — у JSON-форм поле ответа проходит want, у текста текст содержит одно из слов.
+func answerMatches(mode llm.Mode, text, field string, want func(any) bool, words ...string) bool {
+	if mode != llm.ModeJSON && mode != llm.ModeSchema {
+		return containsAny(text, words...)
 	}
 
-	value = strings.ToLower(value)
+	v, ok := answerField(text, field, mode == llm.ModeSchema)
 
-	return slices.ContainsFunc(wants, func(w string) bool { return strings.Contains(value, w) })
+	return ok && want(v)
+}
+
+// answerField — поле единственного JSON-объекта ответа, числа — json.Number; exact требует объект ровно
+// из этого поля, как велит схема проверки с additionalProperties=false.
+func answerField(text, field string, exact bool) (any, bool) {
+	dec := json.NewDecoder(strings.NewReader(text))
+	dec.UseNumber()
+
+	var obj map[string]any
+	if dec.Decode(&obj) != nil {
+		return nil, false
+	}
+
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, false
+	}
+
+	v, ok := obj[field]
+	if !ok || (exact && len(obj) != 1) {
+		return nil, false
+	}
+
+	return v, true
+}
+
+func containsAny(s string, words ...string) bool {
+	s = strings.ToLower(s)
+
+	return slices.ContainsFunc(words, func(w string) bool { return strings.Contains(s, w) })
+}
+
+// failNote — отказ словами протокола: класс, исход, фаза и код. Текст ошибки поставщика не печатается —
+// в нём бывает текст ответа модели.
+func failNote(err error) string {
+	var call *llm.CallError
+
+	switch {
+	case errors.Is(err, errRequestCap):
+		return errRequestCap.Error()
+	case !errors.As(err, &call):
+		return "отказ вне вызова плеча"
+	}
+
+	parts := []string{
+		"класс " + string(call.Class),
+		"исход " + orDash(call.Report.Outcome),
+		"фаза " + orDash(string(call.Phase)),
+	}
+
+	if call.Status != 0 {
+		parts = append(parts, fmt.Sprintf("HTTP %d", call.Status))
+	}
+
+	return "отказ: " + strings.Join(parts, ", ")
 }
 
 // redImage — сплошной красный PNG: цвет однозначен, а назвать его без кадра нельзя.

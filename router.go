@@ -33,12 +33,6 @@ type Needs struct {
 	ImagesPerRequest int
 }
 
-// AttemptOverhead — плечо, тратящее время после срока попытки (уборка): Route.Budget прибавляет
-// его на каждую попытку.
-type AttemptOverhead interface {
-	AttemptOverhead() time.Duration
-}
-
 // Router — задачи потребителя и собранные плечи. Собирается один раз на процесс: запасного
 // плеча и перечитывания конфига нет намеренно — они делают неоднозначными расход, версию
 // и причину отказа. Смена плеча — правка конфига и рестарт.
@@ -50,13 +44,17 @@ type Router struct {
 
 // Validate проверяет задачи потребителя до первого вызова: каждая из needs объявлена, лишних
 // нет, плечо собрано, профиль модели подтверждён и принимает конфиг задачи вместе с её кадрами.
-// Пустой needs проверяет объявленные задачи как текстовые. Ошибки копятся, у каждой путь.
+// nil — требований нет, задачи проверяются как текстовые; пустая карта — задачи не нужны вовсе.
 func (r *Router) Validate(needs map[string]Needs) error {
 	var errs []error
 
 	for _, name := range slices.Sorted(maps.Keys(needs)) {
 		if _, ok := r.Tasks[name]; !ok {
 			errs = append(errs, fmt.Errorf("tasks.%s: задача не объявлена", name))
+		}
+
+		if n := needs[name]; n.ImagesPerMessage < 0 || n.ImagesPerRequest < 0 {
+			errs = append(errs, fmt.Errorf("tasks.%s: отрицательное число кадров", name))
 		}
 	}
 
@@ -232,19 +230,13 @@ func (r Route) Descriptor() Descriptor {
 	return d
 }
 
-// Budget — [Client.Budget] маршрута плюс накладные плеча ([AttemptOverhead]) на каждую попытку.
+// Budget — [Client.Budget] маршрута плюс [Provider.AttemptOverhead] на каждую попытку.
 func (r Route) Budget() time.Duration {
 	if r.client == nil {
 		return 0
 	}
 
-	budget := r.client.Budget()
-
-	if o, ok := r.client.Provider.(AttemptOverhead); ok {
-		budget = addDuration(budget, mulDuration(o.AttemptOverhead(), r.client.attempts()))
-	}
-
-	return budget
+	return addDuration(r.client.Budget(), mulDuration(r.client.Provider.AttemptOverhead(), r.client.attempts()))
 }
 
 // Chat вызывает модель маршрутом. Форма или схема входа, расходящаяся с маршрутом, — отказ

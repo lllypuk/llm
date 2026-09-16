@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net/http"
@@ -85,6 +86,32 @@ func (e *RequestError) Error() string {
 }
 
 func (e *RequestError) Unwrap() error { return e.Err }
+
+// ConfigError — отказ до отправки запроса, который чинит оператор, а не повтор: пустой ключ,
+// отозванная подпись. Временный сбой источника подписи (сеть до IAM) ConfigError не является.
+type ConfigError struct {
+	Message string
+	Err     error
+}
+
+func (e *ConfigError) Error() string {
+	if e.Err != nil {
+		return e.Message + ": " + e.Err.Error()
+	}
+
+	return e.Message
+}
+
+func (e *ConfigError) Unwrap() error { return e.Err }
+
+// misconfigured — отказ конфигурации: [ConfigError] или непроверенный сертификат поставщика (чужой CA).
+func misconfigured(err error) bool {
+	var config *ConfigError
+
+	var verify *tls.CertificateVerificationError
+
+	return errors.As(err, &config) || errors.As(err, &verify)
+}
 
 // PhaseError помечает фазой любую причину — сеть при OAuth, отказ загрузки кадра.
 type PhaseError struct {
@@ -180,7 +207,7 @@ func Latency(err error) time.Duration {
 }
 
 // classify переводит отказ попытки в класс. 429 — после паузы; ключ, баланс и
-// отсутствующая модель — к оператору; прочие 4xx и негодный запрос повторятся тем же.
+// отсутствующая модель, [ConfigError] и чужой CA — к оператору; прочие 4xx и негодный запрос повторятся тем же.
 func classify(provider, model string, err error) *CallError {
 	fail := &CallError{
 		Provider: provider,
@@ -188,6 +215,12 @@ func classify(provider, model string, err error) *CallError {
 		Phase:    phaseOf(err),
 		Class:    RetryImmediate,
 		Err:      err,
+	}
+
+	if misconfigured(err) {
+		fail.Class = RetryNeedsConfiguration
+
+		return fail
 	}
 
 	var request *RequestError

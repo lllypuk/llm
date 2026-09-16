@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/lllypuk/llm"
 	"github.com/lllypuk/llm/internal/httpjson"
@@ -69,6 +70,9 @@ func New(cfg Config) (*Provider, error) {
 
 // Name — [Name].
 func (p *Provider) Name() string { return Name }
+
+// AttemptOverhead — ноль: после срока попытки плечо ничего не делает.
+func (p *Provider) AttemptOverhead() time.Duration { return 0 }
 
 // Capabilities — профиль по имени модели без версии (`yandexgpt/rc` — `yandexgpt`). Рассуждения — только
 // у открытых reasoning-моделей, кадры — только у qwen3.6-35b-a3b; неизвестная модель не подтверждает ничего.

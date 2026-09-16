@@ -41,6 +41,9 @@ func New(host string) *Provider {
 // Name — [Name].
 func (p *Provider) Name() string { return Name }
 
+// AttemptOverhead — ноль: после срока попытки плечо ничего не делает.
+func (p *Provider) AttemptOverhead() time.Duration { return 0 }
+
 // Capabilities — профиль протокола, один на все модели: демон принимает кадры и format
 // у любой, а модель без vision отказывает ответом демона. Предела кадров протокол не ставит.
 func (p *Provider) Capabilities(string) (llm.Capabilities, bool) {

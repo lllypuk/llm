@@ -297,11 +297,11 @@ func attemptMetaOf(res Result, err error) attemptMeta {
 		meta.requestID = status.RequestID
 	}
 
-	// Известный ноль — только доказуемый отказ до генерации: вход, загрузка кадров и 4xx, кроме 408.
+	// Известный ноль — только доказуемый отказ до генерации: вход, загрузка кадров, конфигурация и 4xx, кроме 408.
 	// 5xx и 408 могли прийти после генерации, их расход неизвестен.
 	rejected := status != nil && status.Status >= http.StatusBadRequest &&
 		status.Status < http.StatusInternalServerError && status.Status != http.StatusRequestTimeout
-	if rejected || phaseOf(err) != PhaseInference {
+	if rejected || misconfigured(err) || phaseOf(err) != PhaseInference {
 		meta.usage = Usage{Known: true}
 	}
 

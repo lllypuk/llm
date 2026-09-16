@@ -273,6 +273,9 @@ type Provider interface {
 	Name() string
 	Capabilities(model string) (Capabilities, bool)
 	Complete(ctx context.Context, req Request) (Result, error)
+	// AttemptOverhead — время плеча после срока попытки (уборка файлов); Route.Budget прибавляет его
+	// на попытку. Обязательный метод, а не опция: обёртка потребителя иначе прятала бы его молча.
+	AttemptOverhead() time.Duration
 }
 
 // Chat — узкий интерфейс потребителя: то, что делает [Client].

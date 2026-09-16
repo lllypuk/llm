@@ -107,10 +107,11 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	fs.StringVar(&checks, "checks", strings.Join(defaultChecks(), ","),
 		"проверки через запятую из "+allChecksUsage+"; limits шлёт предельное число кадров и по умолчанию выключена")
 	fs.IntVar(&o.maxRequests, "max-requests", defaultMaxRequests,
-		"потолок обращений: попытки вызова плеч, включая повторы клиента, и запросы OAuth")
+		"потолок обращений: попытки вызова плеч, включая повторы клиента, и запросы проверки oauth; "+
+			"внутренние запросы адаптера (токен, загрузка и удаление файлов) не считаются")
 	fs.Int64Var(&o.maxCost, "max-cost", defaultMaxCost,
-		"потолок оценённого расхода в микроединицах валюты, сверяется между вызовами; "+
-			"расход без тарифа не оценивается — его держит -max-requests")
+		"порог оценённого расхода в микроединицах валюты: проверка за ним не начинается, а вызов, "+
+			"перелетевший его, оплачен целиком и даёт выход 3; расход без тарифа держит только -max-requests")
 	fs.DurationVar(&o.timeout, "timeout", defaultTimeout, "срок прогона целиком")
 
 	if err := fs.Parse(args); err != nil {
@@ -196,7 +197,7 @@ func run(ctx context.Context, o options, stdout, stderr io.Writer, lookup llmcon
 
 // prepare разбирает конфиг, оставляет выбранные задачи и собирает их плечи за общим счётчиком.
 func prepare(data []byte, o options, lookup llmconfig.Lookup) (*runner, error) {
-	cfg, err := llmconfig.Load(data, lookup)
+	cfg, err := llmconfig.Parse(data)
 	if err != nil {
 		return nil, err
 	}
@@ -213,6 +214,10 @@ func prepare(data []byte, o options, lookup llmconfig.Lookup) (*runner, error) {
 	}
 
 	maps.DeleteFunc(cfg.Tasks, func(name string, _ llmconfig.Task) bool { return !slices.Contains(selected, name) })
+
+	if err = cfg.Expand(lookup); err != nil {
+		return nil, err
+	}
 
 	routes, err := cfg.Routes()
 	if err != nil {
@@ -442,6 +447,11 @@ func (r *runner) footer() int {
 		r.meter.limit,
 		orDash(strings.Join(spent, ", ")),
 	)
+
+	if r.overspent() {
+		r.incomplete = true
+		r.printf("- потолок расхода %d мк. превышен\n", r.maxCost)
+	}
 
 	switch {
 	case counts[statusFail] > 0:

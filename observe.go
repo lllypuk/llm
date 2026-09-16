@@ -20,6 +20,7 @@ const (
 	OutcomeBadResponse = "bad_response"
 	OutcomeBadRequest  = "bad_request"
 	OutcomeNetwork     = "network"
+	OutcomeConfig      = "config"
 	OutcomeError       = "error"
 )
 
@@ -92,6 +93,8 @@ func attemptOutcome(ctx context.Context, err error, finish Finish) string {
 		return OutcomeCancelled
 	case errors.Is(err, context.DeadlineExceeded):
 		return OutcomeTimeout
+	case misconfigured(err):
+		return OutcomeConfig
 	case errors.As(err, &request):
 		return OutcomeBadRequest
 	case errors.As(err, &status):

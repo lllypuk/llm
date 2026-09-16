@@ -24,6 +24,8 @@ type routed struct {
 
 func (p *routed) Name() string { return p.name }
 
+func (*routed) AttemptOverhead() time.Duration { return 0 }
+
 func (p *routed) Capabilities(model string) (llm.Capabilities, bool) {
 	caps, ok := p.profiles[model]
 
@@ -157,6 +159,7 @@ func TestRouterValidateCollects(t *testing.T) {
 			"h_attempts": {Provider: "p", Model: "text", Attempts: -1},
 			"i_extra":    {Provider: "p", Model: "text"},
 			"j_ok":       {Provider: "p", Model: "vision"},
+			"k_negative": {Provider: "p", Model: "vision"},
 		},
 	}
 
@@ -170,6 +173,7 @@ func TestRouterValidateCollects(t *testing.T) {
 		"g_images":   {ImagesPerMessage: 2, ImagesPerRequest: 2},
 		"h_attempts": {},
 		"j_ok":       {ImagesPerMessage: 1, ImagesPerRequest: 10},
+		"k_negative": {ImagesPerMessage: -1},
 		"z_unknown":  {},
 	})
 	if err == nil {
@@ -186,6 +190,7 @@ func TestRouterValidateCollects(t *testing.T) {
 		"tasks.g_images: fake/vision: кадров в сообщении больше 1",
 		"tasks.h_attempts: отрицательное число попыток",
 		"tasks.i_extra: задача не нужна потребителю",
+		"tasks.k_negative: отрицательное число кадров",
 		"tasks.z_unknown: задача не объявлена",
 	} {
 		if !strings.Contains(err.Error(), want) {
@@ -203,6 +208,23 @@ func TestRouterValidateCollects(t *testing.T) {
 
 	if _, resolveErr := router.Resolve("z_unknown"); resolveErr == nil {
 		t.Fatal("неизвестная задача разрешилась")
+	}
+}
+
+// TestRouterValidateNilAndEmptyNeeds — nil проверяет объявленное без требований, пустая карта
+// объявляет, что задач потребителю не нужно.
+func TestRouterValidateNilAndEmptyNeeds(t *testing.T) {
+	t.Parallel()
+
+	router, _ := textRouter()
+
+	if err := router.Validate(nil); err != nil {
+		t.Fatalf("nil: %v", err)
+	}
+
+	if err := router.Validate(map[string]llm.Needs{}); err == nil ||
+		!strings.Contains(err.Error(), "задача не нужна потребителю") {
+		t.Fatalf("пустая карта: %v", err)
 	}
 }
 
@@ -348,6 +370,29 @@ func TestRouteBudgetsAreSeparate(t *testing.T) {
 
 	if (llm.Route{}).Budget() != 0 {
 		t.Fatal("нулевой маршрут с бюджетом")
+	}
+}
+
+// TestRouteBudgetSurvivesWrapper — обёртка потребителя, встроившая плечо, накладных не прячет.
+func TestRouteBudgetSurvivesWrapper(t *testing.T) {
+	t.Parallel()
+
+	cloud := &cleaning{routed{name: "cloud", profiles: map[string]llm.Capabilities{"m": allCaps()}}}
+	wrapped := struct{ llm.Provider }{cloud}
+	tasks := map[string]llm.TaskConfig{"t": {Provider: "p", Model: "m", AttemptTimeout: time.Second, Attempts: 1}}
+
+	bare, err := (&llm.Router{Providers: map[string]llm.Provider{"p": cloud}, Tasks: tasks}).Resolve("t")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	route, err := (&llm.Router{Providers: map[string]llm.Provider{"p": wrapped}, Tasks: tasks}).Resolve("t")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if route.Budget() != bare.Budget() || route.Budget() <= time.Second {
+		t.Fatalf("бюджет обёрнутого %v, голого %v", route.Budget(), bare.Budget())
 	}
 }
 

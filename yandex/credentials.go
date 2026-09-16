@@ -3,6 +3,8 @@ package yandex
 import (
 	"context"
 	"errors"
+
+	"github.com/lllypuk/llm"
 )
 
 // Схемы заголовка Authorization.
@@ -24,13 +26,14 @@ type apiKey string
 
 func (k apiKey) Token(context.Context) (string, string, error) {
 	if k == "" {
-		return "", "", errors.New("ключ API пуст")
+		return "", "", &llm.ConfigError{Message: "ключ API пуст"}
 	}
 
 	return SchemeAPIKey, string(k), nil
 }
 
 // IAMToken — IAM-токен, который выпускает и обновляет вызывающий: адаптер его не кеширует.
+// Постоянный отказ (отозванный аккаунт) источник возвращает [llm.ConfigError], иначе его повторяют.
 type IAMToken func(ctx context.Context) (string, error)
 
 // Token — [SchemeBearer] с текущим токеном; пустой — отказ.

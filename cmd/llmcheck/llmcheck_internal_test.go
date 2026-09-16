@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +18,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lllypuk/llm"
 )
 
 func TestParseFlags(t *testing.T) {
@@ -72,7 +75,8 @@ func TestParseFlagsRejects(t *testing.T) {
 	}
 }
 
-// fakeOllama отвечает всем полям проверок сразу, а на предел в один токен — обрезанным ответом.
+// fakeOllama отвечает всем полям проверок сразу, а маршруту со схемой — только полем схемы; на предел
+// в один токен — обрезанным ответом.
 func fakeOllama(t *testing.T, calls *int) *httptest.Server {
 	t.Helper()
 
@@ -80,6 +84,7 @@ func fakeOllama(t *testing.T, calls *int) *httptest.Server {
 		*calls++
 
 		var req struct {
+			Format  json.RawMessage `json:"format"`
 			Options struct {
 				NumPredict int `json:"num_predict"`
 			} `json:"options"`
@@ -87,7 +92,19 @@ func fakeOllama(t *testing.T, calls *int) *httptest.Server {
 
 		_ = json.NewDecoder(r.Body).Decode(&req)
 
-		content, reason := `{"ok":true,"color":"красный","answer":391}`, "stop"
+		full := map[string]any{fieldOK: true, fieldColor: "красный", fieldAnswer: 391}
+
+		var schema struct {
+			Properties map[string]any `json:"properties"`
+		}
+
+		if json.Unmarshal(req.Format, &schema) == nil && len(schema.Properties) > 0 {
+			maps.DeleteFunc(full, func(k string, _ any) bool { _, ok := schema.Properties[k]; return !ok })
+		}
+
+		answer, _ := json.Marshal(full)
+		content, reason := string(answer), "stop"
+
 		if req.Options.NumPredict == 1 {
 			content, reason = "Пон", "length"
 		}
@@ -109,19 +126,29 @@ func fakeOllama(t *testing.T, calls *int) *httptest.Server {
 func writeConfig(t *testing.T, endpoint string) string {
 	t.Helper()
 
-	cfg := `{
+	return writeFile(t, `{
   "providers": {
-    "local": {"kind": "ollama", "endpoint": "` + endpoint + `"},
+    "local": {"kind": "ollama", "endpoint": "`+endpoint+`"},
     "giga": {"kind": "gigachat", "endpoint": "https://giga.invalid", "oauth_endpoint": "https://oauth.invalid",
              "scope": "PERS", "auth": {"authorization_key": "${GIGACHAT_KEY_UNSET}"}}
   },
   "tasks": {
     "ask": {"provider": "local", "model": "gemma", "output": {"mode": "json"}, "price_plan": "free"},
     "nameplate": {"provider": "local", "model": "gemma", "output": {"mode": "schema", "schema_name": "n"}},
-    "twin": {"provider": "local", "model": "gemma", "output": {"mode": "json"}}
+    "twin": {"provider": "local", "model": "gemma", "output": {"mode": "json"}},
+    "paid": {"provider": "local", "model": "gemma", "price_plan": "rub"},
+    "cloud": {"provider": "giga", "model": "GigaChat-2-Max"}
   },
-  "prices": {"free": [{"revision": "free-1", "valid_from": "2026-01-01T00:00:00Z", "free": true}]}
-}`
+  "prices": {
+    "free": [{"revision": "free-1", "valid_from": "2026-01-01T00:00:00Z", "free": true}],
+    "rub": [{"revision": "rub-1", "currency": "RUB", "valid_from": "2026-01-01T00:00:00Z",
+             "rates": {"billable_input": 1000000000, "output": 1000000000}}]
+  }
+}`)
+}
+
+func writeFile(t *testing.T, cfg string) string {
+	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "llm.json")
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
@@ -141,6 +168,7 @@ func TestRunAgainstFakeOllama(t *testing.T) {
 	srv := fakeOllama(t, &calls)
 	o := options{
 		config:      writeConfig(t, srv.URL),
+		tasks:       []string{"ask", "nameplate", "twin"},
 		checks:      defaultChecks(),
 		maxRequests: defaultMaxRequests,
 		maxCost:     defaultMaxCost,
@@ -213,5 +241,113 @@ func TestRunRejectsUnknownTask(t *testing.T) {
 
 	if !strings.Contains(stderr.String(), `"nope"`) {
 		t.Fatalf("stderr %s", stderr.String())
+	}
+}
+
+// TestRunNeedsOnlySelectedSecrets — ключ плеча невыбранной задачи не нужен, а без -tasks его отсутствие
+// — отказ конфига.
+func TestRunNeedsOnlySelectedSecrets(t *testing.T) {
+	t.Parallel()
+
+	var calls int
+
+	srv := fakeOllama(t, &calls)
+	o := options{config: writeConfig(t, srv.URL), checks: []string{checkModel},
+		maxRequests: defaultMaxRequests, maxCost: defaultMaxCost, timeout: time.Minute}
+
+	var stderr bytes.Buffer
+
+	if code := run(context.Background(), o, io.Discard, &stderr, noEnv); code != exitUsage ||
+		!strings.Contains(stderr.String(), "GIGACHAT_KEY_UNSET") {
+		t.Fatalf("все задачи: код %d, stderr %s", code, stderr.String())
+	}
+
+	o.tasks = []string{"ask"}
+
+	if code := run(context.Background(), o, io.Discard, &stderr, noEnv); code != exitOK {
+		t.Fatalf("задача ask: код %d, stderr %s", code, stderr.String())
+	}
+}
+
+// TestRunFailsWhenLastCallOverspends — вызов, перелетевший потолок расхода, не оставляет выход нулевым.
+func TestRunFailsWhenLastCallOverspends(t *testing.T) {
+	t.Parallel()
+
+	var calls int
+
+	srv := fakeOllama(t, &calls)
+	o := options{config: writeConfig(t, srv.URL), tasks: []string{"paid"}, checks: []string{checkModel},
+		maxRequests: defaultMaxRequests, maxCost: 1, timeout: time.Minute}
+
+	var stdout bytes.Buffer
+
+	if code := run(context.Background(), o, &stdout, io.Discard, noEnv); code != exitIncomplete ||
+		!strings.Contains(stdout.String(), "потолок расхода 1 мк. превышен") {
+		t.Fatalf("код %d:\n%s", code, stdout.String())
+	}
+}
+
+// TestProtocolHidesProviderText — ни текст отказа поставщика, ни адрес с учётными данными в протокол
+// не попадают.
+func TestProtocolHidesProviderText(t *testing.T) {
+	t.Parallel()
+
+	const leak = "текст-ответа-модели"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": leak})
+	}))
+	t.Cleanup(srv.Close)
+
+	o := options{config: writeConfig(t, srv.URL), tasks: []string{"ask"}, checks: []string{checkModel},
+		maxRequests: defaultMaxRequests, maxCost: defaultMaxCost, timeout: time.Minute}
+
+	var stdout bytes.Buffer
+
+	if code := run(context.Background(), o, &stdout, io.Discard, noEnv); code != exitViolation {
+		t.Fatalf("код %d:\n%s", code, stdout.String())
+	}
+
+	if strings.Contains(stdout.String(), leak) || !strings.Contains(stdout.String(), "HTTP 400") {
+		t.Fatalf("протокол:\n%s", stdout.String())
+	}
+
+	o.config = writeFile(t, `{"providers": {"local": {"kind": "ollama", "endpoint": "http://u:hunter2@o"}},
+  "tasks": {"ask": {"provider": "local", "model": "gemma"}}}`)
+
+	var stderr bytes.Buffer
+
+	if code := run(context.Background(), o, &stdout, &stderr, noEnv); code != exitUsage ||
+		strings.Contains(stderr.String(), "hunter2") {
+		t.Fatalf("адрес с паролем: код %d, stderr %s", code, stderr.String())
+	}
+}
+
+// TestAnswerMatchesChecksTypes — поле ответа сверяется типом и значением, у схемы лишних полей нет.
+func TestAnswerMatchesChecksTypes(t *testing.T) {
+	t.Parallel()
+
+	isTrue := func(v any) bool { return v == true }
+
+	cases := []struct {
+		mode llm.Mode
+		text string
+		want bool
+	}{
+		{llm.ModeSchema, `{"ok":true}`, true},
+		{llm.ModeSchema, `{"ok":"not true","extra":1}`, false},
+		{llm.ModeSchema, `{"ok":true,"extra":1}`, false},
+		{llm.ModeJSON, `{"ok":true,"extra":1}`, true},
+		{llm.ModeJSON, `{"ok":"true"}`, false},
+		{llm.ModeJSON, `{"ok":true} {"ok":false}`, false},
+		{llm.ModeText, "true", true},
+		{llm.ModeText, "нет", false},
+	}
+
+	for _, tc := range cases {
+		if got := answerMatches(tc.mode, tc.text, fieldOK, isTrue, "true"); got != tc.want {
+			t.Errorf("%s %s: %t", tc.mode, tc.text, got)
+		}
 	}
 }

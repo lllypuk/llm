@@ -2,6 +2,7 @@ package llmconfig_test
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -193,6 +194,35 @@ func TestLoadExpandsOnlyActiveSecrets(t *testing.T) {
 	}
 }
 
+// TestParseLeavesSecretsForNarrowedTasks — Parse секретов не читает, и Expand после сужения задач
+// не спрашивает ключ плеча, на которое ссылалась только отброшенная задача.
+func TestParseLeavesSecretsForNarrowedTasks(t *testing.T) {
+	t.Parallel()
+
+	data := strings.Replace(devConfig, `"provider": "local",
+      "model": "gemma",
+      "revision"`, `"provider": "giga",
+      "model": "GigaChat-2-Max",
+      "revision"`, 1)
+
+	cfg, err := llmconfig.Parse([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	env := &lookup{env: map[string]string{}}
+
+	maps.DeleteFunc(cfg.Tasks, func(_ string, task llmconfig.Task) bool { return task.Provider == "giga" })
+
+	if err = cfg.Expand(env.get); err != nil || len(env.asked) != 0 {
+		t.Fatalf("Expand: %v, спрошены %v", err, env.asked)
+	}
+
+	if _, err = llmconfig.Parse([]byte(`{"providers": {"o": {"kind": "ollama"}}}`)); err == nil {
+		t.Fatal("Parse не проверил файл")
+	}
+}
+
 // TestLoadIsStrict — неизвестные поля, повтор ключа и чужие типы отбиваются все сразу, с путём.
 func TestLoadIsStrict(t *testing.T) {
 	t.Parallel()
@@ -248,7 +278,10 @@ func TestValidateCollects(t *testing.T) {
 	    "local": {"kind": "ollama", "endpoint": "http://o", "scope": "x", "auth": {"api_key": "${K}"}},
 	    "giga": {"kind": "gigachat", "endpoint": "https://g"},
 	    "ya": {"kind": "yandex", "endpoint": "", "folder": "f", "auth": {"api_key": "$K"}},
-	    "odd": {"kind": "openai", "endpoint": "https://o"}
+	    "odd": {"kind": "openai", "endpoint": "https://o"},
+	    "leak": {"kind": "ollama", "endpoint": "http://user:hunter2@o"},
+	    "query": {"kind": "ollama", "endpoint": "http://o/?key=hunter2"},
+	    "bare": {"kind": "ollama", "endpoint": "ollama:11434"}
 	  },
 	  "tasks": {
 	    "a": {"provider": "nowhere", "model": "m", "price_plan": "nope"},
@@ -281,6 +314,9 @@ func TestValidateCollects(t *testing.T) {
 		"providers.ya.endpoint: адрес не задан",
 		"providers.ya.auth.api_key: секрет задаётся ссылкой",
 		`providers.odd.kind: неизвестный вид плеча "openai"`,
+		"providers.leak.endpoint: учётные данные в адресе запрещены",
+		"providers.query.endpoint: query и фрагмент в адресе запрещены",
+		"providers.bare.endpoint: схема не http и не https",
 		`tasks.a.provider: плечо "nowhere" не объявлено`,
 		`tasks.a.price_plan: тариф "nope" не объявлен`,
 		"tasks.b: модель не задана",
@@ -298,6 +334,10 @@ func TestValidateCollects(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("нет %q в\n%v", want, err)
 		}
+	}
+
+	if strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("адрес с секретом попал в ошибку: %v", err)
 	}
 
 	if !strings.Contains(err.Error(), "tasks.b: неизвестный режим ответа xml") &&

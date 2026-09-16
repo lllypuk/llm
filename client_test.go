@@ -2,10 +2,12 @@ package llm_test
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"math"
 	"net/http"
+	"net/url"
 	"strconv"
 	"sync"
 	"testing"
@@ -30,6 +32,8 @@ type fake struct {
 }
 
 func (f *fake) Name() string { return "fake" }
+
+func (*fake) AttemptOverhead() time.Duration { return 0 }
 
 // Capabilities — заданный профиль; без него подтверждено всё, кроме пределов кадров.
 func (f *fake) Capabilities(string) (llm.Capabilities, bool) {
@@ -168,6 +172,31 @@ func TestChatDoesNotRetryNeedsConfiguration(t *testing.T) {
 		call := callError(t, err)
 		if f.count() != 1 || call.Class != llm.RetryNeedsConfiguration || !llm.Recoverable(err) {
 			t.Errorf("%d: попыток %d, класс %s, восстановим %v", code, f.count(), call.Class, llm.Recoverable(err))
+		}
+	}
+}
+
+// TestChatConfigErrorNeedsOperator — пустой ключ и чужой CA не повторяются клиентом, остаются
+// восстановимыми и не тратят расход: запрос до поставщика не дошёл.
+func TestChatConfigErrorNeedsOperator(t *testing.T) {
+	t.Parallel()
+
+	for name, cause := range map[string]error{
+		"ConfigError": &llm.PhaseError{Phase: llm.PhaseAuth, Err: &llm.ConfigError{Message: "ключ API пуст"}},
+		"чужой CA":    &url.Error{Op: "Post", URL: "https://api.invalid", Err: &tls.CertificateVerificationError{}},
+	} {
+		f := &fake{steps: []step{{err: cause}}}
+		obs := &recorder{}
+
+		_, err := client(f, obs).Chat(context.Background(), req())
+
+		call := callError(t, err)
+		if f.count() != 1 || call.Class != llm.RetryNeedsConfiguration || !llm.Recoverable(err) {
+			t.Errorf("%s: попыток %d, класс %s", name, f.count(), call.Class)
+		}
+
+		if a := obs.attempts[0]; a.Outcome != llm.OutcomeConfig || !a.Usage.Known || !call.Report.Usage.Known {
+			t.Errorf("%s: попытка %+v, расход вызова %+v", name, a, call.Report.Usage)
 		}
 	}
 }

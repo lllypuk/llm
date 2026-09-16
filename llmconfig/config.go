@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -87,14 +88,38 @@ type Rates struct {
 // Lookup — источник переменных окружения; os.LookupEnv подходит как есть.
 type Lookup func(name string) (string, bool)
 
-// Load разбирает, проверяет и разворачивает секреты; ошибки всех трёх шагов копятся вместе.
+// Load разбирает, проверяет и разворачивает секреты; ошибки проверки и секретов копятся вместе.
 func Load(data []byte, lookup Lookup) (*Config, error) {
-	var c Config
-	if err := strict(data, &c); err != nil {
+	c, err := decode(data)
+	if err != nil {
 		return nil, err
 	}
 
-	if err := errors.Join(c.Validate(), c.Expand(lookup)); err != nil {
+	if err = errors.Join(c.Validate(), c.Expand(lookup)); err != nil {
+		return nil, err
+	}
+
+	return c, nil
+}
+
+// Parse разбирает и проверяет файл целиком, не читая секретов: потребитель, сужающий набор задач,
+// зовёт Expand после сужения, и ключи плеч невыбранных задач ему не нужны.
+func Parse(data []byte) (*Config, error) {
+	c, err := decode(data)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = c.Validate(); err != nil {
+		return nil, err
+	}
+
+	return c, nil
+}
+
+func decode(data []byte) (*Config, error) {
+	var c Config
+	if err := strict(data, &c); err != nil {
 		return nil, err
 	}
 
@@ -200,10 +225,32 @@ func (c *Config) PricePlans(name string) ([]pricing.PricePlan, error) {
 	return out, errors.Join(errs...)
 }
 
+// badAddress — почему адрес плеча негоден; сам адрес в ответ не попадает: в нём мог оказаться секрет.
+// Учётные данные, query и фрагмент отбиваются — адрес печатается в протоколы и логи как есть.
+func badAddress(addr string) string {
+	u, err := url.Parse(addr)
+
+	switch {
+	case err != nil:
+		return "не URL"
+	case u.Scheme != "http" && u.Scheme != "https":
+		return "схема не http и не https"
+	case u.Host == "":
+		return "хост не задан"
+	case u.User != nil:
+		return "учётные данные в адресе запрещены: секрет задаётся полем auth"
+	case u.RawQuery != "" || u.ForceQuery || u.Fragment != "":
+		return "query и фрагмент в адресе запрещены"
+	default:
+		return ""
+	}
+}
+
 // Поля секретов в путях ошибок.
 const (
-	gigachatAuthField = "auth.authorization_key"
-	yandexAuthField   = "auth.api_key"
+	gigachatAuthField  = "auth.authorization_key"
+	oauthEndpointField = "oauth_endpoint"
+	yandexAuthField    = "auth.api_key"
 )
 
 // field — поле плеча для сверки с видом: задано ли и обязательно ли.
@@ -216,7 +263,7 @@ func (p Provider) validate(path string) []error {
 	var errs []error
 
 	fields := []field{
-		{"oauth_endpoint", p.OAuthEndpoint != ""},
+		{oauthEndpointField, p.OAuthEndpoint != ""},
 		{"scope", p.Scope != ""},
 		{"folder", p.Folder != ""},
 		{gigachatAuthField, !p.Auth.AuthorizationKey.IsZero()},
@@ -228,7 +275,7 @@ func (p Provider) validate(path string) []error {
 	switch p.Kind {
 	case KindOllama:
 	case KindGigaChat:
-		required = []string{"oauth_endpoint", "scope", gigachatAuthField}
+		required = []string{oauthEndpointField, "scope", gigachatAuthField}
 	case KindYandex:
 		required = []string{"folder", yandexAuthField}
 	default:
@@ -237,6 +284,12 @@ func (p Provider) validate(path string) []error {
 
 	if p.Endpoint == "" {
 		errs = append(errs, fmt.Errorf("%s.endpoint: адрес не задан", path))
+	}
+
+	for key, addr := range map[string]string{"endpoint": p.Endpoint, oauthEndpointField: p.OAuthEndpoint} {
+		if msg := badAddress(addr); addr != "" && msg != "" {
+			errs = append(errs, fmt.Errorf("%s.%s: %s", path, key, msg))
+		}
 	}
 
 	for _, f := range fields {

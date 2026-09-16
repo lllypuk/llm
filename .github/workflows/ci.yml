@@ -18,6 +18,7 @@ jobs:
           go-version-file: go.mod
       - run: go vet ./...
       - run: go test -race ./...
+      - run: go test -race -tags live ./cmd/llmcheck
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
