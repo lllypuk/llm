@@ -79,6 +79,7 @@ func (p *Provider) Capabilities(model string) (llm.Capabilities, bool) {
 		JSON:            true,
 		Schema:          true,
 		Strict:          true,
+		SchemaName:      true,
 		Temperature:     true,
 		MaxOutputTokens: true,
 	}

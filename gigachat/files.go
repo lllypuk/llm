@@ -28,6 +28,9 @@ const (
 // CleanupBudget — срок уборки файлов после попытки, отдельный от её срока: входит в бюджет вызова сверху.
 const CleanupBudget = 10 * time.Second
 
+// AttemptOverhead — [CleanupBudget]: уборка идёт после срока попытки, и бюджет маршрута её учитывает.
+func (p *Provider) AttemptOverhead() time.Duration { return CleanupBudget }
+
 // maxFileBody — предел ответа `/files`: описание одного файла.
 const maxFileBody = 64 << 10
 

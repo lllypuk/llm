@@ -118,6 +118,7 @@ type Capabilities struct {
 	JSON                bool
 	Schema              bool
 	Strict              bool
+	SchemaName          bool // схема без имени отбивается
 	MaxImagesPerMessage int
 	MaxImagesPerRequest int
 	Temperature         bool
@@ -148,6 +149,8 @@ func (c Capabilities) Check(r Request) error {
 		msg = "режим json не поддержан"
 	case r.Output.Mode == ModeSchema && !c.Schema:
 		msg = "режим schema не поддержан"
+	case r.Output.Mode == ModeSchema && c.SchemaName && r.Output.Name == "":
+		msg = "схема без имени"
 	case r.Output.Strict && !c.Strict:
 		msg = "strict не поддержан"
 	case r.Options.Temperature != nil && !c.Temperature:

@@ -392,3 +392,34 @@ func TestImageLimits(t *testing.T) {
 		})
 	}
 }
+
+// TestRouteBudgetCoversCleanup — бюджет маршрута на GigaChat включает уборку каждой попытки.
+func TestRouteBudgetCoversCleanup(t *testing.T) {
+	t.Parallel()
+
+	p, err := gigachat.New(gigachat.Config{
+		OAuthEndpoint: "https://oauth", APIEndpoint: "https://api", AuthorizationKey: "k", Scope: "s",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	router := &llm.Router{
+		Providers: map[string]llm.Provider{"giga": p},
+		Tasks: map[string]llm.TaskConfig{
+			"nameplate": {Provider: "giga", Model: "GigaChat-2-Max", AttemptTimeout: time.Minute, Attempts: 2},
+		},
+	}
+
+	route, err := router.Resolve("nameplate")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client := llm.New(p, time.Minute)
+	client.Attempts = 2
+
+	if got, want := route.Budget(), client.Budget()+2*gigachat.CleanupBudget; got != want {
+		t.Fatalf("бюджет %v, ожидался %v", got, want)
+	}
+}
