@@ -57,8 +57,8 @@ func New(p Provider, timeout time.Duration) *Client {
 	}
 }
 
-// Budget — верхняя оценка времени вызова: все попытки со своими таймаутами плюс
-// худшие паузы; переполнение насыщается до максимальной длительности.
+// Budget — все попытки со своими таймаутами плюс худшие паузы. Уборку плеча после срока
+// попытки (gigachat.CleanupBudget) не включает; переполнение насыщается.
 func (c *Client) Budget() time.Duration {
 	attempts := c.attempts()
 	budget := mulDuration(c.timeout(), attempts)
@@ -295,6 +295,12 @@ func attemptMetaOf(res Result, err error) attemptMeta {
 		meta.server = response.ServerLatency
 	case errors.As(err, &status):
 		meta.requestID = status.RequestID
+		meta.usage = Usage{Known: true}
+	}
+
+	// Вход и загрузка кадров до генерации не доходят: их расход известен и равен нулю.
+	if phaseOf(err) != PhaseInference {
+		meta.usage = Usage{Known: true}
 	}
 
 	return meta

@@ -674,6 +674,35 @@ func TestChatCarriesAttemptReports(t *testing.T) {
 	}
 }
 
+// TestChatUsageKnownWithoutGeneration — отказ статусом и фазы до генерации расхода не несут:
+// повтор после них не делает расход вызова неизвестным, а сетевой отказ генерации делает.
+func TestChatUsageKnownWithoutGeneration(t *testing.T) {
+	t.Parallel()
+
+	upload := step{err: &llm.PhaseError{Phase: llm.PhaseUpload, Err: errors.New("сеть")}}
+	f := &fake{steps: []step{status(429, 0), upload, ok("done", 2, 3)}}
+
+	res, err := client(f, nil).Chat(context.Background(), req())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !res.Report.Usage.Known || !res.Attempts[0].Usage.Known || !res.Attempts[1].Usage.Known {
+		t.Errorf("расход %+v, попытки %+v", res.Report.Usage, res.Attempts)
+	}
+
+	f = &fake{steps: []step{{err: errors.New("сеть")}, ok("done", 2, 3)}}
+
+	res, err = client(f, nil).Chat(context.Background(), req())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if res.Report.Usage.Known {
+		t.Errorf("сетевой отказ генерации: расход %+v", res.Report.Usage)
+	}
+}
+
 // TestChatConcurrentReportsStayApart — конкурентные вызовы одного клиента не смешивают отчёты попыток.
 func TestChatConcurrentReportsStayApart(t *testing.T) {
 	t.Parallel()

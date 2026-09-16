@@ -71,7 +71,7 @@ func New(cfg Config) (*Provider, error) {
 func (p *Provider) Name() string { return Name }
 
 // Capabilities — профиль по имени модели без версии (`yandexgpt/rc` — `yandexgpt`). Рассуждения — только
-// у открытых reasoning-моделей, кадры — только у gemma; неизвестная модель не подтверждает ничего.
+// у открытых reasoning-моделей, кадры — только у qwen3.6-35b-a3b; неизвестная модель не подтверждает ничего.
 func (p *Provider) Capabilities(model string) (llm.Capabilities, bool) {
 	name, _, _ := strings.Cut(model, "/")
 
@@ -87,7 +87,7 @@ func (p *Provider) Capabilities(model string) (llm.Capabilities, bool) {
 	case "yandexgpt", "yandexgpt-lite":
 	case "gpt-oss-120b", "gpt-oss-20b", "qwen3-235b-a22b-fp8":
 		caps.Reasoning = true
-	case "gemma-3-27b-it":
+	case "qwen3.6-35b-a3b":
 		caps.Vision = true
 	default:
 		return llm.Capabilities{}, false

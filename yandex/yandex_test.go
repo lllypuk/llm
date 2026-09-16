@@ -82,7 +82,7 @@ func client(t *testing.T, s *server, creds yandex.CredentialSource) *llm.Client 
 }
 
 func reply(finish, content string) string {
-	return `{"id":"x","object":"chat.completion","model":"gpt://b1g/gemma-3-27b-it/latest",` +
+	return `{"id":"x","object":"chat.completion","model":"gpt://b1g/qwen3.6-35b-a3b/latest",` +
 		`"choices":[{"index":0,"message":{"role":"assistant","content":` + strconv.Quote(content) + `},` +
 		`"finish_reason":"` + finish + `"}],"usage":{"prompt_tokens":120,"completion_tokens":40,"total_tokens":160,` +
 		`"prompt_tokens_details":{"cached_tokens":20},"completion_tokens_details":{"reasoning_tokens":30}}}`
@@ -116,7 +116,7 @@ func TestChatExactRequestAndResult(t *testing.T) {
 
 	res, err := c.Chat(context.Background(), llm.Request{
 		CallID: "call-1",
-		Model:  "gemma-3-27b-it/latest",
+		Model:  "qwen3.6-35b-a3b/latest",
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Text: "правила"},
 			{Role: llm.RoleUser, Text: "шильдик", Images: []llm.Image{{MIME: "image/jpeg", Data: []byte("ab")}}},
@@ -134,7 +134,7 @@ func TestChatExactRequestAndResult(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := `{"model":"gpt://b1g/gemma-3-27b-it/latest","messages":[{"role":"system","content":"правила"},` +
+	want := `{"model":"gpt://b1g/qwen3.6-35b-a3b/latest","messages":[{"role":"system","content":"правила"},` +
 		`{"role":"user","content":[{"type":"text","text":"шильдик"},` +
 		`{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,YWI="}}]},` +
 		`{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,Yw=="}}]}],` +
@@ -148,7 +148,7 @@ func TestChatExactRequestAndResult(t *testing.T) {
 		t.Errorf("подпись %q, каталог %q", s.auth[0], s.project[0])
 	}
 
-	if res.Text != `{"brand":"Bosch"}` || res.Model != "gpt://b1g/gemma-3-27b-it/latest" || res.RequestID != "req-1" ||
+	if res.Text != `{"brand":"Bosch"}` || res.Model != "gpt://b1g/qwen3.6-35b-a3b/latest" || res.RequestID != "req-1" ||
 		res.Finish != (llm.Finish{Raw: "stop", Kind: llm.FinishStop}) || !reflect.DeepEqual(res.Usage, fullUsage()) {
 		t.Errorf("результат %+v", res)
 	}
@@ -361,7 +361,7 @@ func TestRejectedBeforeNetwork(t *testing.T) {
 			req: llm.Request{Model: "gpt://b1g/yandexgpt/latest", Messages: text},
 		},
 		"не изображение": {
-			req: llm.Request{Model: "gemma-3-27b-it", Messages: []llm.Message{
+			req: llm.Request{Model: "qwen3.6-35b-a3b", Messages: []llm.Message{
 				{Role: llm.RoleUser, Images: []llm.Image{{MIME: "application/pdf", Data: []byte("a")}}},
 			}},
 		},

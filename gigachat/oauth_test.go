@@ -208,6 +208,51 @@ func TestTokenRefreshedWithMargin(t *testing.T) {
 	}
 }
 
+// TestFailedEarlyRefreshKeepsLiveToken — отказ обновления в запасе срока отдаёт ещё живой токен.
+func TestFailedEarlyRefreshKeepsLiveToken(t *testing.T) {
+	t.Parallel()
+
+	var clock atomic.Int64
+
+	start := time.Now()
+	clock.Store(start.UnixNano())
+
+	var seen atomic.Value
+
+	b := &backend{}
+	b.oauth = func(w http.ResponseWriter, _ *http.Request) {
+		if b.oauthCalls.Load() > 1 {
+			w.WriteHeader(http.StatusBadGateway)
+
+			return
+		}
+
+		issue(w, "token-1", start.Add(30*time.Minute))
+	}
+	b.api = func(_ http.ResponseWriter, r *http.Request) { seen.Store(bearer(r)) }
+
+	p := provider(t, b)
+	p.SetClock(func() time.Time { return time.Unix(0, clock.Load()) })
+
+	for _, at := range []time.Duration{0, 26 * time.Minute} {
+		clock.Store(start.Add(at).UnixNano())
+
+		if err := send(context.Background(), t, p, "/models"); err != nil {
+			t.Fatalf("%s: %v", at, err)
+		}
+	}
+
+	if seen.Load() != "token-1" || b.oauthCalls.Load() != 2 {
+		t.Errorf("токен %v, запросов OAuth %d", seen.Load(), b.oauthCalls.Load())
+	}
+
+	clock.Store(start.Add(31 * time.Minute).UnixNano())
+
+	if err := send(context.Background(), t, p, "/models"); err == nil {
+		t.Error("истёкший токен отдан после отказа обновления")
+	}
+}
+
 // TestConcurrentRefreshMerged — десять вызовов на пустом кеше дают один запрос OAuth.
 func TestConcurrentRefreshMerged(t *testing.T) {
 	t.Parallel()

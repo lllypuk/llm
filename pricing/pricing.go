@@ -147,56 +147,45 @@ func Estimate(attempt llm.AttemptReport, plan PricePlan) Cost {
 
 // EstimateCall складывает оценки попыток; попытке достаётся тариф последней ревизии,
 // начавшейся не позже её старта. Разные ревизии перечисляются через запятую в порядке
-// попыток, разные валюты не складываются — unknown.
+// попыток, разные валюты платных ревизий не складываются — unknown; бесплатная ревизия
+// валюты не навязывает.
 func EstimateCall(attempts []llm.AttemptReport, plans ...PricePlan) Cost {
-	if len(attempts) == 0 {
-		return Cost{Status: StatusUnknown}
-	}
-
 	var (
 		total     Cost
 		revisions []string
 		known     int
-		free      = true
+		paid      int
+		partial   bool
 	)
 
 	for _, attempt := range attempts {
-		plan, ok := planAt(plans, attempt.StartedAt)
-		if !ok {
-			free = false
-
-			continue
-		}
-
-		est := Estimate(attempt, plan)
+		est := estimateAt(attempt, plans)
 		if est.Status == StatusUnknown {
-			free = false
-
 			continue
 		}
 
-		if known > 0 && est.Currency != total.Currency {
-			return Cost{Status: StatusUnknown}
+		if est.Status != StatusFree {
+			if paid > 0 && est.Currency != total.Currency {
+				return Cost{Status: StatusUnknown}
+			}
+
+			paid++
 		}
 
 		if est.AmountMicro > math.MaxInt64-total.AmountMicro {
 			return Cost{Status: StatusUnknown}
 		}
 
+		if est.Status != StatusFree || paid == 0 {
+			total.Currency = est.Currency
+		}
+
 		total.AmountMicro += est.AmountMicro
-		total.Currency = est.Currency
 		known++
+		partial = partial || est.Status == StatusPartial
 
 		if !slices.Contains(revisions, est.Revision) {
 			revisions = append(revisions, est.Revision)
-		}
-
-		if est.Status != StatusFree {
-			free = false
-		}
-
-		if est.Status == StatusPartial {
-			total.Status = StatusPartial
 		}
 	}
 
@@ -205,15 +194,25 @@ func EstimateCall(attempts []llm.AttemptReport, plans ...PricePlan) Cost {
 	switch {
 	case known == 0:
 		return Cost{Status: StatusUnknown}
-	case free:
-		total.Status = StatusFree
-	case known < len(attempts):
+	case known < len(attempts) || partial:
 		total.Status = StatusPartial
-	case total.Status == "":
+	case paid == 0:
+		total.Status = StatusFree
+	default:
 		total.Status = StatusEstimated
 	}
 
 	return total
+}
+
+// estimateAt оценивает попытку ревизией, действовавшей на её старте.
+func estimateAt(attempt llm.AttemptReport, plans []PricePlan) Cost {
+	plan, ok := planAt(plans, attempt.StartedAt)
+	if !ok {
+		return Cost{Status: StatusUnknown}
+	}
+
+	return Estimate(attempt, plan)
 }
 
 func planAt(plans []PricePlan, at time.Time) (PricePlan, bool) {

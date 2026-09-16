@@ -178,8 +178,12 @@ func (c *tokenCache) refresh(ctx context.Context, f *flight) {
 
 	c.mu.Lock()
 
-	if err == nil {
+	switch {
+	case err == nil:
 		c.cur = tok
+	case c.cur != nil && c.now().Before(c.cur.expires):
+		// Отказ раннего обновления не гасит ещё живой токен: он доживает свой срок.
+		tok, err = c.cur, nil
 	}
 
 	if c.flight == f {

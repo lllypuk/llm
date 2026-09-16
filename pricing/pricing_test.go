@@ -193,6 +193,12 @@ func TestEstimateCallStatus(t *testing.T) {
 			pricing.Cost{AmountMicro: 5, Currency: "RUB", Revision: "r", Status: "partial"},
 		},
 		{
+			"бесплатная и платная ревизии",
+			[]llm.AttemptReport{known, attempt(month(time.October), llm.Usage{Output: 5, Known: true})},
+			[]pricing.PricePlan{free, rub("r2", month(time.October), pricing.Rates{Output: new(int64(1_000_000))})},
+			pricing.Cost{AmountMicro: 5, Currency: "RUB", Revision: "f,r2", Status: "estimated"},
+		},
+		{
 			"все бесплатные",
 			[]llm.AttemptReport{silent, known},
 			[]pricing.PricePlan{free},
