@@ -90,7 +90,7 @@ func (r Request) Validate() error {
 
 	switch {
 	case r.Model == "":
-		msg = "модель не задана"
+		msg = msgNoModel
 	case r.Output.Mode == ModeSchema && len(r.Output.Schema) == 0:
 		msg = "режим schema без схемы"
 	case r.Output.Mode != "" && r.Output.Mode != ModeText && r.Output.Mode != ModeJSON && r.Output.Mode != ModeSchema:

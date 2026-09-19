@@ -376,3 +376,126 @@ func (profiled) Capabilities(string) (llm.Capabilities, bool) {
 		Vision: true, JSON: true, Schema: true, Strict: true, Temperature: true, Reasoning: true, MaxOutputTokens: true,
 	}, true
 }
+
+const speechConfig = `{
+  "providers": {
+    "local": {"kind": "ollama", "endpoint": "http://ollama:11434"},
+    "stt": {
+      "kind": "speechkit",
+      "endpoint": "https://stt.api.cloud.yandex.net/speech/v1",
+      "folder": "b1g",
+      "auth": {"api_key": "${YANDEX_API_KEY}"}
+    },
+    "salute": {
+      "kind": "salutespeech",
+      "endpoint": "https://smartspeech.sber.ru/rest/v1",
+      "oauth_endpoint": "https://ngw.devices.sberbank.ru:9443/api/v2/oauth",
+      "scope": "SALUTE_SPEECH_PERS",
+      "auth": {"authorization_key": "${SALUTE_AUTH_KEY}"}
+    }
+  },
+  "tasks": {"ask": {"provider": "local", "model": "gemma"}},
+  "speech": {
+    "dictation": {"provider": "stt", "model": "general", "language": "ru-RU",
+                  "attempt_timeout": "10s", "attempts": 2, "price_plan": "stt"}
+  },
+  "prices": {
+    "stt": [{"revision": "2026-09", "currency": "RUB", "valid_from": "2026-09-01T00:00:00+03:00",
+             "audio_step": "15s", "rates": {"audio_second": 10667}}]
+  }
+}`
+
+// TestSpeechSectionIsOptional — без раздела speech конфиг валиден, маршрутов речи нет.
+func TestSpeechSectionIsOptional(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := llmconfig.Load([]byte(devConfig), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	routes, err := cfg.SpeechRoutes()
+	if err != nil || len(routes) != 0 {
+		t.Fatalf("SpeechRoutes = %v, %v", routes, err)
+	}
+}
+
+// TestSpeechRoutesAndSecrets — маршрут речи разобран, ключ его плеча читается, ключ неактивного — нет.
+func TestSpeechRoutesAndSecrets(t *testing.T) {
+	t.Parallel()
+
+	env := &lookup{env: map[string]string{"YANDEX_API_KEY": "k"}}
+
+	cfg, err := llmconfig.Load([]byte(speechConfig), env.get)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !slices.Equal(env.asked, []string{"YANDEX_API_KEY"}) {
+		t.Fatalf("спрошены %v", env.asked)
+	}
+
+	routes, err := cfg.SpeechRoutes()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := llm.SpeechTaskConfig{
+		Provider:       "stt",
+		Model:          "general",
+		Language:       "ru-RU",
+		AttemptTimeout: 10 * time.Second,
+		Attempts:       2,
+		PricePlan:      "stt",
+	}
+	if routes["dictation"] != want {
+		t.Fatalf("маршрут %+v", routes["dictation"])
+	}
+
+	plans, err := cfg.PricePlans("stt")
+	if err != nil || plans[0].AudioStep != 15*time.Second || *plans[0].Rates.AudioSecond != 10667 {
+		t.Fatalf("тариф %+v, %v", plans, err)
+	}
+}
+
+// TestSpeechAndChatProvidersDoNotMix — задача речи на чатовом плече и чатовая на речевом отбиваются.
+func TestSpeechAndChatProvidersDoNotMix(t *testing.T) {
+	t.Parallel()
+
+	data := `{
+	  "providers": {
+	    "local": {"kind": "ollama", "endpoint": "http://o"},
+	    "stt": {"kind": "speechkit", "endpoint": "https://s", "folder": "f", "auth": {"api_key": "${K}"}},
+	    "salute": {"kind": "salutespeech", "endpoint": "https://s"}
+	  },
+	  "tasks": {"ask": {"provider": "stt", "model": "m"}},
+	  "speech": {
+	    "a": {"provider": "local", "model": "general"},
+	    "b": {"provider": "nowhere", "model": "general", "price_plan": "nope"},
+	    "c": {"provider": "stt", "model": "", "attempt_timeout": "soon", "attempts": -1}
+	  },
+	  "prices": {"p": [{"revision": "r", "currency": "RUB", "valid_from": "2026-09-01T00:00:00Z", "audio_step": "-1s"}]}
+	}`
+
+	_, err := llmconfig.Parse([]byte(data))
+	if err == nil {
+		t.Fatal("ожидался отказ")
+	}
+
+	for _, want := range []string{
+		`tasks.ask.provider: плечо "stt" распознаёт речь, а не отвечает`,
+		`speech.a.provider: плечо "local" не распознаёт речь`,
+		`speech.b.provider: плечо "nowhere" не объявлено`,
+		`speech.b.price_plan: тариф "nope" не объявлен`,
+		"speech.c.model: модель не задана",
+		`speech.c.attempt_timeout: не длительность: "soon"`,
+		"speech.c.attempts: отрицательное число попыток",
+		"providers.salute.oauth_endpoint: обязательно у плеча salutespeech",
+		"providers.salute.auth.authorization_key: обязательно у плеча salutespeech",
+		`prices.p[0].audio_step: не положительная длительность: "-1s"`,
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("нет %q в\n%v", want, err)
+		}
+	}
+}

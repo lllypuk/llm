@@ -21,13 +21,18 @@ const (
 	KindOllama   = "ollama"
 	KindGigaChat = "gigachat"
 	KindYandex   = "yandex"
+
+	KindSpeechKit    = "speechkit"
+	KindSaluteSpeech = "salutespeech"
 )
 
 // Config — файл маршрутов целиком. Повреждённый не заменяется ничем: запасного конфига нет.
+// Раздел speech необязателен: без него речь выключена.
 type Config struct {
-	Providers map[string]Provider `json:"providers"`
-	Tasks     map[string]Task     `json:"tasks"`
-	Prices    map[string][]Price  `json:"prices,omitempty"`
+	Providers map[string]Provider   `json:"providers"`
+	Tasks     map[string]Task       `json:"tasks"`
+	Speech    map[string]SpeechTask `json:"speech,omitempty"`
+	Prices    map[string][]Price    `json:"prices,omitempty"`
 }
 
 // Provider — плечо: адреса, подпись и корни TLS. Поля, чужие виду плеча, отбиваются.
@@ -41,7 +46,7 @@ type Provider struct {
 	CAFile        string `json:"ca_file,omitempty"`
 }
 
-// Auth — секреты плеча: ключ авторизации GigaChat или ключ API Яндекса.
+// Auth — секреты плеча: ключ авторизации Сбера (GigaChat, SaluteSpeech) или ключ API Яндекса.
 type Auth struct {
 	AuthorizationKey Secret `json:"authorization_key,omitzero"`
 	APIKey           Secret `json:"api_key,omitzero"`
@@ -61,6 +66,16 @@ type Task struct {
 	PricePlan       string   `json:"price_plan,omitempty"`
 }
 
+// SpeechTask — привязка задачи речи к плечу распознавания; срок попытки — строкой длительности Go.
+type SpeechTask struct {
+	Provider       string `json:"provider"`
+	Model          string `json:"model"`
+	Language       string `json:"language,omitempty"`
+	AttemptTimeout string `json:"attempt_timeout,omitempty"`
+	Attempts       int    `json:"attempts,omitempty"`
+	PricePlan      string `json:"price_plan,omitempty"`
+}
+
 // Output — форма ответа без схемы: схема — артефакт потребителя.
 type Output struct {
 	Mode       string `json:"mode,omitempty"`
@@ -68,21 +83,23 @@ type Output struct {
 	Strict     bool   `json:"strict,omitempty"`
 }
 
-// Price — ревизия тарифа; начало действия — RFC 3339.
+// Price — ревизия тарифа; начало действия — RFC 3339, шаг записи — строкой длительности Go.
 type Price struct {
 	Revision  string `json:"revision"`
 	Currency  string `json:"currency,omitempty"`
 	ValidFrom string `json:"valid_from"`
 	Free      bool   `json:"free,omitempty"`
 	Rates     Rates  `json:"rates,omitzero"`
+	AudioStep string `json:"audio_step,omitempty"`
 }
 
-// Rates — микроединицы валюты за миллион токенов; отсутствующее поле — тарифа нет.
+// Rates — микроединицы валюты за миллион токенов, у записи — за секунду; отсутствующее поле — тарифа нет.
 type Rates struct {
 	BillableInput *int64 `json:"billable_input,omitempty"`
 	CachedInput   *int64 `json:"cached_input,omitempty"`
 	Reasoning     *int64 `json:"reasoning,omitempty"`
 	Output        *int64 `json:"output,omitempty"`
+	AudioSecond   *int64 `json:"audio_second,omitempty"`
 }
 
 // Lookup — источник переменных окружения; os.LookupEnv подходит как есть.
@@ -138,13 +155,31 @@ func (c *Config) Validate() error {
 		path := "tasks." + name
 		task := c.Tasks[name]
 
-		if _, ok := c.Providers[task.Provider]; !ok {
+		switch p, ok := c.Providers[task.Provider]; {
+		case !ok:
 			errs = append(errs, fmt.Errorf("%s.provider: плечо %q не объявлено", path, task.Provider))
+		case speechKind(p.Kind):
+			errs = append(errs, fmt.Errorf("%s.provider: плечо %q распознаёт речь, а не отвечает", path, task.Provider))
 		}
 
-		if _, ok := c.Prices[task.PricePlan]; task.PricePlan != "" && !ok {
-			errs = append(errs, fmt.Errorf("%s.price_plan: тариф %q не объявлен", path, task.PricePlan))
+		errs = append(errs, c.checkPrice(path, task.PricePlan)...)
+
+		_, taskErrs := task.route(path)
+		errs = append(errs, taskErrs...)
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(c.Speech)) {
+		path := "speech." + name
+		task := c.Speech[name]
+
+		switch p, ok := c.Providers[task.Provider]; {
+		case !ok:
+			errs = append(errs, fmt.Errorf("%s.provider: плечо %q не объявлено", path, task.Provider))
+		case !speechKind(p.Kind):
+			errs = append(errs, fmt.Errorf("%s.provider: плечо %q не распознаёт речь", path, task.Provider))
 		}
+
+		errs = append(errs, c.checkPrice(path, task.PricePlan)...)
 
 		_, taskErrs := task.route(path)
 		errs = append(errs, taskErrs...)
@@ -158,14 +193,30 @@ func (c *Config) Validate() error {
 	return errors.Join(errs...)
 }
 
-// Active — плечи, на которые ссылается хотя бы одна задача, по имени.
+func (c *Config) checkPrice(path, plan string) []error {
+	if _, ok := c.Prices[plan]; plan != "" && !ok {
+		return []error{fmt.Errorf("%s.price_plan: тариф %q не объявлен", path, plan)}
+	}
+
+	return nil
+}
+
+// Active — плечи, на которые ссылается хотя бы одна задача чата или речи, по имени.
 func (c *Config) Active() []string {
 	var names []string
 
-	for _, task := range c.Tasks {
-		if _, ok := c.Providers[task.Provider]; ok && !slices.Contains(names, task.Provider) {
-			names = append(names, task.Provider)
+	add := func(provider string) {
+		if _, ok := c.Providers[provider]; ok && !slices.Contains(names, provider) {
+			names = append(names, provider)
 		}
+	}
+
+	for _, task := range c.Tasks {
+		add(task.Provider)
+	}
+
+	for _, task := range c.Speech {
+		add(task.Provider)
 	}
 
 	slices.Sort(names)
@@ -206,6 +257,21 @@ func (c *Config) Routes() (map[string]llm.TaskConfig, error) {
 
 	for name, task := range c.Tasks {
 		route, taskErrs := task.route("tasks." + name)
+		routes[name] = route
+		errs = append(errs, taskErrs...)
+	}
+
+	return routes, errors.Join(errs...)
+}
+
+// SpeechRoutes — задачи речи маршрутизатора; пустая карта — раздела нет. Ошибка — конфиг не прошёл бы Validate.
+func (c *Config) SpeechRoutes() (map[string]llm.SpeechTaskConfig, error) {
+	routes := make(map[string]llm.SpeechTaskConfig, len(c.Speech))
+
+	var errs []error
+
+	for name, task := range c.Speech {
+		route, taskErrs := task.route("speech." + name)
 		routes[name] = route
 		errs = append(errs, taskErrs...)
 	}
@@ -274,9 +340,9 @@ func (p Provider) validate(path string) []error {
 
 	switch p.Kind {
 	case KindOllama:
-	case KindGigaChat:
+	case KindGigaChat, KindSaluteSpeech:
 		required = []string{oauthEndpointField, "scope", gigachatAuthField}
-	case KindYandex:
+	case KindYandex, KindSpeechKit:
 		required = []string{"folder", yandexAuthField}
 	default:
 		return append(errs, fmt.Errorf("%s.kind: неизвестный вид плеча %q", path, p.Kind))
@@ -342,24 +408,54 @@ func (t Task) route(path string) (llm.TaskConfig, []error) {
 		errs = append(errs, fmt.Errorf("%s: %w", path, err))
 	}
 
-	if t.Attempts < 0 {
+	route.AttemptTimeout, errs = budget(path, t.AttemptTimeout, t.Attempts, errs)
+
+	return route, errs
+}
+
+// speechKind — плечо распознавания речи: чатовой задаче оно не годится, и наоборот.
+func speechKind(kind string) bool { return kind == KindSpeechKit || kind == KindSaluteSpeech }
+
+func (t SpeechTask) route(path string) (llm.SpeechTaskConfig, []error) {
+	route := llm.SpeechTaskConfig{
+		Provider:  t.Provider,
+		Model:     t.Model,
+		Language:  t.Language,
+		Attempts:  t.Attempts,
+		PricePlan: t.PricePlan,
+	}
+
+	var errs []error
+
+	if t.Model == "" {
+		errs = append(errs, fmt.Errorf("%s.model: модель не задана", path))
+	}
+
+	route.AttemptTimeout, errs = budget(path, t.AttemptTimeout, t.Attempts, errs)
+
+	return route, errs
+}
+
+// budget — срок попытки задачи; отрицательное число попыток и негодный срок дописываются в errs.
+func budget(path, timeout string, attempts int, errs []error) (time.Duration, []error) {
+	if attempts < 0 {
 		errs = append(errs, fmt.Errorf("%s.attempts: отрицательное число попыток", path))
 	}
 
-	if t.AttemptTimeout != "" {
-		d, err := time.ParseDuration(t.AttemptTimeout)
-
-		switch {
-		case err != nil:
-			errs = append(errs, fmt.Errorf("%s.attempt_timeout: не длительность: %q", path, t.AttemptTimeout))
-		case d <= 0:
-			errs = append(errs, fmt.Errorf("%s.attempt_timeout: срок не положителен", path))
-		default:
-			route.AttemptTimeout = d
-		}
+	if timeout == "" {
+		return 0, errs
 	}
 
-	return route, errs
+	d, err := time.ParseDuration(timeout)
+
+	switch {
+	case err != nil:
+		return 0, append(errs, fmt.Errorf("%s.attempt_timeout: не длительность: %q", path, timeout))
+	case d <= 0:
+		return 0, append(errs, fmt.Errorf("%s.attempt_timeout: срок не положителен", path))
+	default:
+		return d, errs
+	}
 }
 
 // plans — ревизии одного тарифа: у каждой свои начало действия и имя, иначе попытке достаётся
@@ -382,6 +478,11 @@ func plans(path string, prices []Price) ([]pricing.PricePlan, []error) {
 			errs = append(errs, fmt.Errorf("%s.valid_from: не время RFC 3339: %q", at, price.ValidFrom))
 		}
 
+		step, stepErr := time.ParseDuration(price.AudioStep)
+		if price.AudioStep != "" && (stepErr != nil || step <= 0) {
+			errs = append(errs, fmt.Errorf("%s.audio_step: не положительная длительность: %q", at, price.AudioStep))
+		}
+
 		plan := pricing.PricePlan{
 			Revision:  price.Revision,
 			Currency:  price.Currency,
@@ -392,7 +493,9 @@ func plans(path string, prices []Price) ([]pricing.PricePlan, []error) {
 				CachedInput:   price.Rates.CachedInput,
 				Reasoning:     price.Rates.Reasoning,
 				Output:        price.Rates.Output,
+				AudioSecond:   price.Rates.AudioSecond,
 			},
+			AudioStep: step,
 		}
 
 		if planErr := plan.Validate(); planErr != nil {

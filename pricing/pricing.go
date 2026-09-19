@@ -24,23 +24,30 @@ const (
 	StatusFree      Status = "free"
 )
 
-const tokensPerRate = 1_000_000
+const (
+	tokensPerRate  = 1_000_000
+	millisPerRate  = 1_000
+	defaultAudioMs = 1_000
+)
 
-// Rates — цена части расхода в микроединицах валюты за миллион токенов; nil — тарифа нет.
+// Rates — цена части расхода в микроединицах валюты за миллион токенов, у записи — за секунду; nil — тарифа нет.
 type Rates struct {
 	BillableInput *int64
 	CachedInput   *int64
 	Reasoning     *int64
 	Output        *int64
+	AudioSecond   *int64
 }
 
 // PricePlan — тариф одной ревизии, действующий с ValidFrom до ValidFrom следующей.
+// AudioStep — шаг, до которого запись округляется вверх; ноль — секунда.
 type PricePlan struct {
 	Revision  string
 	Currency  string
 	ValidFrom time.Time
 	Free      bool
 	Rates     Rates
+	AudioStep time.Duration
 }
 
 // Validate отбивает тариф, по которому оценка вышла бы неверной, а не неизвестной.
@@ -56,6 +63,10 @@ func (p PricePlan) Validate() error {
 
 	if p.Currency == "" && !p.Free {
 		errs = append(errs, fmt.Errorf("pricing: %s: пустая валюта", p.Revision))
+	}
+
+	if p.AudioStep < 0 || p.AudioStep%time.Millisecond != 0 {
+		errs = append(errs, fmt.Errorf("pricing: %s: шаг записи не кратен миллисекунде", p.Revision))
 	}
 
 	for _, r := range p.Rates.named() {
@@ -126,6 +137,22 @@ func Estimate(attempt llm.AttemptReport, plan PricePlan) Cost {
 		}
 
 		cost, ok := mul(int64(part.tokens), *part.rate)
+		if !ok || cost > math.MaxInt64-sum {
+			return unknown
+		}
+
+		sum += cost
+		counted = true
+	}
+
+	switch {
+	case attempt.AudioMillis < 0:
+		return unknown
+	case attempt.AudioMillis == 0:
+	case plan.Rates.AudioSecond == nil:
+		complete = false
+	default:
+		cost, ok := audioCost(attempt.AudioMillis, plan.audioStep(), *plan.Rates.AudioSecond)
 		if !ok || cost > math.MaxInt64-sum {
 			return unknown
 		}
@@ -253,7 +280,31 @@ func (r Rates) named() []namedRate {
 		{"cached_input", r.CachedInput},
 		{"reasoning", r.Reasoning},
 		{"output", r.Output},
+		{"audio_second", r.AudioSecond},
 	}
+}
+
+func (p PricePlan) audioStep() int64 {
+	if p.AudioStep == 0 {
+		return defaultAudioMs
+	}
+
+	return p.AudioStep.Milliseconds()
+}
+
+// audioCost — запись, округлённая вверх до шага, в масштабе суммы токенов: миллионных долях микроединицы.
+func audioCost(millis, step, rate int64) (int64, bool) {
+	billed, ok := mul(ceilDiv(millis, step), step)
+	if !ok {
+		return 0, false
+	}
+
+	perMilli, ok := mul(billed, rate)
+	if !ok {
+		return 0, false
+	}
+
+	return mul(perMilli, tokensPerRate/millisPerRate)
 }
 
 func mul(a, b int64) (int64, bool) {

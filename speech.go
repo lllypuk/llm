@@ -44,7 +44,7 @@ func (r SpeechRequest) Validate(maxAudio time.Duration) error {
 
 	switch {
 	case r.Model == "":
-		msg = "модель не задана"
+		msg = msgNoModel
 	case r.SampleRate <= 0:
 		msg = "частота дискретизации не задана"
 	case len(r.PCM) == 0:
@@ -67,3 +67,6 @@ type Transcript struct {
 	RequestID   string
 	AudioMillis int64
 }
+
+// msgNoModel — отказ запроса и маршрута без модели, у чата и у речи один.
+const msgNoModel = "модель не задана"

@@ -33,18 +33,21 @@ type Needs struct {
 	ImagesPerRequest int
 }
 
-// Router — задачи потребителя и собранные плечи. Собирается один раз на процесс: запасного
+// Router — задачи потребителя и собранные плечи; речь — свои плечи и задачи, чатовых не касаются. Собирается один раз на процесс: запасного
 // плеча и перечитывания конфига нет намеренно — они делают неоднозначными расход, версию
 // и причину отказа. Смена плеча — правка конфига и рестарт.
 type Router struct {
-	Providers map[string]Provider
-	Tasks     map[string]TaskConfig
-	Observe   Observer
+	Providers   map[string]Provider
+	Tasks       map[string]TaskConfig
+	Speech      map[string]Transcriber
+	SpeechTasks map[string]SpeechTaskConfig
+	Observe     Observer
 }
 
 // Validate проверяет задачи потребителя до первого вызова: каждая из needs объявлена, лишних
 // нет, плечо собрано, профиль модели подтверждён и принимает конфиг задачи вместе с её кадрами.
 // nil — требований нет, задачи проверяются как текстовые; пустая карта — задачи не нужны вовсе.
+// Задачи речи проверяются все: needs их не касается.
 func (r *Router) Validate(needs map[string]Needs) error {
 	var errs []error
 
@@ -67,6 +70,12 @@ func (r *Router) Validate(needs map[string]Needs) error {
 		}
 
 		if _, err := r.resolve(name, need); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(r.SpeechTasks)) {
+		if _, err := r.resolveSpeech(name, r.SpeechTasks[name]); err != nil {
 			errs = append(errs, err)
 		}
 	}

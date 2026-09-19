@@ -242,3 +242,47 @@ func TestPlanValidateRejectsCommaInRevision(t *testing.T) {
 		t.Fatal("Validate: запятая в ревизии принята")
 	}
 }
+
+// TestEstimateAudioRoundsUpToStep — запись округляется вверх до шага тарифа; ноль шага — секунда.
+func TestEstimateAudioRoundsUpToStep(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		step   time.Duration
+		millis int64
+		want   int64
+	}{
+		{15 * time.Second, 1, 150_000},
+		{15 * time.Second, 15_000, 150_000},
+		{15 * time.Second, 15_001, 300_000},
+		{0, 1_000, 10_000},
+		{0, 1_001, 20_000},
+		{time.Millisecond, 1_001, 10_010},
+	} {
+		plan := rub("stt", month(time.September), pricing.Rates{AudioSecond: new(int64(10_000))})
+		plan.AudioStep = tc.step
+		a := llm.AttemptReport{StartedAt: month(time.September), Usage: llm.Usage{Known: true}, AudioMillis: tc.millis}
+
+		got := pricing.Estimate(a, plan)
+		if got.Status != pricing.StatusEstimated || got.AmountMicro != tc.want {
+			t.Errorf("шаг %v, %d мс: %+v, want estimated %d", tc.step, tc.millis, got, tc.want)
+		}
+	}
+}
+
+// TestEstimateAudioWithoutRateIsUnknown — запись без цены секунды — unknown, а не ноль.
+func TestEstimateAudioWithoutRateIsUnknown(t *testing.T) {
+	t.Parallel()
+
+	plan := rub("giga", month(time.September), pricing.Rates{Output: new(int64(1))})
+	a := llm.AttemptReport{StartedAt: month(time.September), Usage: llm.Usage{Known: true}, AudioMillis: 500}
+
+	if got := pricing.Estimate(a, plan); got.Status != pricing.StatusUnknown {
+		t.Fatalf("Estimate = %+v, want unknown", got)
+	}
+
+	plan.AudioStep = -time.Second
+	if plan.Validate() == nil {
+		t.Fatal("отрицательный шаг записи принят")
+	}
+}
