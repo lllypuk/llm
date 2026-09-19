@@ -72,6 +72,7 @@ type result struct {
 	status  status
 	notes   []string
 	call    *callFacts
+	line    string
 }
 
 // callFacts — обезличенное о вызове: без текста запроса, токенов и идентификаторов поставщика.
@@ -209,8 +210,11 @@ func (r *runner) add(res result) {
 
 	r.printf("- [%s] %s %s", res.status, res.check, res.subject)
 
-	if res.call != nil {
+	switch {
+	case res.call != nil:
 		r.printf(": %s", res.call.line())
+	case res.line != "":
+		r.printf(": %s", res.line)
 	}
 
 	r.printf("\n")

@@ -75,21 +75,31 @@ type options struct {
 }
 
 func main() {
-	opts, err := parseFlags(os.Args[1:], os.Stderr)
-	if errors.Is(err, flag.ErrHelp) {
-		os.Exit(exitOK)
-	}
-
-	if err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, "llmcheck:", err)
-		os.Exit(exitUsage)
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	code := run(ctx, opts, os.Stdout, os.Stderr, os.LookupEnv)
+	code := dispatch(ctx, os.Args[1:], os.Stdout, os.Stderr, os.LookupEnv)
 
 	stop()
 	os.Exit(code)
+}
+
+// dispatch — подкоманда speech или проверки чата.
+func dispatch(ctx context.Context, args []string, stdout, stderr io.Writer, lookup llmconfig.Lookup) int {
+	if len(args) > 0 && args[0] == cmdSpeech {
+		return speechMain(ctx, args[1:], stdout, stderr, lookup)
+	}
+
+	opts, err := parseFlags(args, stderr)
+	if errors.Is(err, flag.ErrHelp) {
+		return exitOK
+	}
+
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, "llmcheck:", err)
+
+		return exitUsage
+	}
+
+	return run(ctx, opts, stdout, stderr, lookup)
 }
 
 func parseFlags(args []string, stderr io.Writer) (options, error) {
@@ -214,6 +224,9 @@ func prepare(data []byte, o options, lookup llmconfig.Lookup) (*runner, error) {
 	}
 
 	maps.DeleteFunc(cfg.Tasks, func(name string, _ llmconfig.Task) bool { return !slices.Contains(selected, name) })
+
+	// Плечи речи чатовым проверкам не собираются, и их ключи не читаются.
+	cfg.Speech = nil
 
 	if err = cfg.Expand(lookup); err != nil {
 		return nil, err
