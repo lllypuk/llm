@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/lllypuk/llm"
+	"github.com/lllypuk/llm/internal/sberauth"
 )
 
 // Send — GET по пути API через do: вход и 401 без протокола chat.
@@ -16,18 +17,13 @@ func (p *Provider) Send(ctx context.Context, path string) (*http.Response, error
 }
 
 // SetClock подменяет часы кеша токенов; до первого вызова.
-func (p *Provider) SetClock(now func() time.Time) { p.tokens.now = now }
+func (p *Provider) SetClock(now func() time.Time) { p.auth.Tokens().SetClock(now) }
 
 // Waiters — сколько вызовов ждут текущего обновления токена.
 func (p *Provider) Waiters() int {
-	p.tokens.mu.Lock()
-	defer p.tokens.mu.Unlock()
+	n, _ := p.auth.Tokens().Flight()
 
-	if p.tokens.flight == nil {
-		return 0
-	}
-
-	return p.tokens.flight.waiters
+	return n
 }
 
 // WithFiles — загрузка кадров, send и уборка без протокола chat.
@@ -40,38 +36,29 @@ func (p *Provider) WithFiles(
 }
 
 // TokenCache — кеш токенов с подменным запросом OAuth.
-type TokenCache struct{ c *tokenCache }
+type TokenCache struct{ c *sberauth.Cache }
 
 // NewTokenCache — кеш поверх fetch, отдающего значение токена и срок.
 func NewTokenCache(fetch func(ctx context.Context) (string, time.Time, error)) TokenCache {
-	return TokenCache{c: newTokenCache(func(ctx context.Context) (*token, error) {
+	return TokenCache{c: sberauth.NewCache(func(ctx context.Context) (*sberauth.Token, error) {
 		value, expires, err := fetch(ctx)
 		if err != nil {
 			return nil, err
 		}
 
-		return &token{value: value, expires: expires}, nil
+		return &sberauth.Token{Value: value, Expires: expires}, nil
 	})}
 }
 
 // Get — значение токена.
 func (t TokenCache) Get(ctx context.Context) (string, error) {
-	tok, err := t.c.get(ctx)
+	tok, err := t.c.Get(ctx)
 	if err != nil {
 		return "", err
 	}
 
-	return tok.value, nil
+	return tok.Value, nil
 }
 
 // Flight — ждущие текущего обновления и канал его завершения; nil — обновления нет.
-func (t TokenCache) Flight() (int, <-chan struct{}) {
-	t.c.mu.Lock()
-	defer t.c.mu.Unlock()
-
-	if t.c.flight == nil {
-		return 0, nil
-	}
-
-	return t.c.flight.waiters, t.c.flight.done
-}
+func (t TokenCache) Flight() (int, <-chan struct{}) { return t.c.Flight() }

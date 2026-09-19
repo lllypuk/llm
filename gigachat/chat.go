@@ -9,6 +9,7 @@ import (
 
 	"github.com/lllypuk/llm"
 	"github.com/lllypuk/llm/internal/httpjson"
+	"github.com/lllypuk/llm/internal/sberauth"
 )
 
 // maxChatBody — предел ответа `/chat/completions`; длиннее — отказ попытки, а не обрезанный ответ.
@@ -172,7 +173,7 @@ func (p *Provider) chat(ctx context.Context, body chatRequest) (llm.Result, erro
 	requestID := resp.Header.Get("X-Request-Id")
 
 	if resp.StatusCode != http.StatusOK {
-		st := httpjson.ReadStatus(resp, maxErrorBody, errorMessage)
+		st := httpjson.ReadStatus(resp, maxErrorBody, sberauth.ErrorMessage)
 
 		return llm.Result{}, &llm.StatusError{
 			Status:     st.Code,

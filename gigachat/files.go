@@ -15,6 +15,7 @@ import (
 
 	"github.com/lllypuk/llm"
 	"github.com/lllypuk/llm/internal/httpjson"
+	"github.com/lllypuk/llm/internal/sberauth"
 )
 
 // Пределы кадров GigaChat; профиль возможностей объявляет те же.
@@ -188,7 +189,7 @@ func (p *Provider) upload(ctx context.Context, img llm.Image, name string) (stri
 	requestID := resp.Header.Get("X-Request-Id")
 
 	if resp.StatusCode != http.StatusOK {
-		st := httpjson.ReadStatus(resp, maxErrorBody, errorMessage)
+		st := httpjson.ReadStatus(resp, maxErrorBody, sberauth.ErrorMessage)
 
 		return "", &llm.StatusError{
 			Status:     st.Code,
@@ -292,7 +293,7 @@ func (p *Provider) remove(ctx context.Context, id string) error {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		st := httpjson.ReadStatus(resp, maxErrorBody, errorMessage)
+		st := httpjson.ReadStatus(resp, maxErrorBody, sberauth.ErrorMessage)
 
 		return &llm.StatusError{Status: st.Code, Message: st.Message, RequestID: resp.Header.Get("X-Request-Id")}
 	}
