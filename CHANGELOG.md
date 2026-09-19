@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.5.0
+
+Распознавание речи — свой контракт и свои маршруты; чатовый `Router` и `Provider` не меняются.
+
+- `Transcriber`, `SpeechRequest` (LPCM 16 бит моно), `Transcript` с `AudioMillis`; `SpeechCapabilities.MaxAudio`
+  отбивает длинную запись до плеча.
+- `yandex.NewSpeech` — синхронный `stt:recognize` SpeechKit; `salutespeech` — `speech:recognize` со своим
+  ключом и scope. OAuth Сбера вынесен в `internal/sberauth`: токен на пару (ключ, scope), GigaChat прежний.
+- `Router.Speech`, `Router.SpeechTasks`, `ResolveSpeech` — `false` без ошибки, если задача не объявлена;
+  у `SpeechRoute.Transcribe` свой цикл попыток на общих паузах, сроке и классах отказа.
+- `llmconfig`: виды `speechkit` и `salutespeech`, необязательный раздел `speech`; плечо речи у чатовой
+  задачи и наоборот — ошибка разбора.
+- Отчёты: `AudioMillis` у попытки и вызова; токены речи — известный ноль. Запись попытки, отказавшей
+  5xx или сроком, идёт в расход, 4xx — нет.
+- `pricing`: `AudioSecond` и шаг округления вверх `AudioStep` (по умолчанию секунда); записи без цены — `unknown`.
+- `cmd/llmcheck speech`: каталог `*.wav` по маршруту речи — задержка, секунды, стоимость; текст — рядом
+  в `*.txt`, не в протокол. Чатовые проверки раздел `speech` больше не собирают.
+
 ## v0.4.1
 
 - `cmd/llmcheck`: ответ текстом сверяется словом целиком — без регистра, пробелов, кавычек и точки в

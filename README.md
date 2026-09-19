@@ -2,7 +2,8 @@
 
 Вызов языковой модели одним контрактом поверх нескольких плеч. Корень пакета — контракт,
 повторы, бюджет времени, классы отказа и наблюдатель; протокол поставщика — в подпакете.
-Есть `ollama` (нативный `/api/chat`), `gigachat` (OAuth, `/files`) и `yandex` (OpenAI-совместимый `chat/completions`).
+Есть `ollama` (нативный `/api/chat`), `gigachat` (OAuth, `/files`) и `yandex` (OpenAI-совместимый `chat/completions`);
+распознавание речи — `yandex.NewSpeech` (SpeechKit) и `salutespeech`.
 
 ```go
 c := llm.New(ollama.New("http://localhost:11434"), 90*time.Second)
@@ -101,6 +102,26 @@ GIGACHAT_KEY=… go run -tags live ./cmd/llmcheck -config llm.json -tasks namepl
 - Протокол — markdown без секретов, текста ответов и отказов поставщика и идентификаторов запросов. Выход 1 — нарушение
   контракта, 2 — флаги или конфиг, 3 — прогон остановлен потолком или сроком.
 - Проверка — контракт плеча, а не качество извлечения: его меряет прогон потребителя на своих данных.
+
+## Распознавание речи
+
+Отдельный контракт `Transcriber`: плечо речи не реализует `Provider` и не отвечает на чатовые проверки.
+Вход один — сырые сэмплы LPCM 16 бит моно; контейнер (WAV) снимает потребитель.
+
+```go
+router := &llm.Router{Speech: map[string]llm.Transcriber{"sber": asr}, SpeechTasks: speechRoutes}
+route, ok, err := router.ResolveSpeech("dictation")
+res, err := route.Transcribe(ctx, llm.SpeechInput{CallID: id, SampleRate: 16000, PCM: pcm})
+```
+
+- Раздел `speech` в `llmconfig` необязателен: без него `ResolveSpeech` даёт `false` без ошибки, и речь
+  у потребителя выключена. `Config.SpeechRoutes` собирает задачи речи, плечи — потребитель.
+- Запись длиннее `SpeechCapabilities.MaxAudio` плеча отбивается до сети классом `never`.
+- Повторы — те же классы отказа и паузы, что у чата. Отказ 5xx или сроком оплачивается: плечо могло
+  распознать запись; у 4xx расхода нет.
+- Пустой `Transcript.Text` — не ошибка: что тишина, решает потребитель.
+- `llmcheck speech -config llm.json -dir записи/` прогоняет каталог `*.wav` по маршруту: задержка,
+  секунды и стоимость в протокол, текст — в `*.txt` рядом с записью. Качество сравнивается глазами.
 
 ## Что остаётся потребителю
 
