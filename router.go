@@ -33,21 +33,23 @@ type Needs struct {
 	ImagesPerRequest int
 }
 
-// Router — задачи потребителя и собранные плечи; речь — свои плечи и задачи, чатовых не касаются. Собирается один раз на процесс: запасного
-// плеча и перечитывания конфига нет намеренно — они делают неоднозначными расход, версию
-// и причину отказа. Смена плеча — правка конфига и рестарт.
+// Router — задачи потребителя и собранные плечи: чат, речь и OCR, у каждого контракта свои. Собирается
+// один раз на процесс: запасного плеча и перечитывания конфига нет намеренно — они делают
+// неоднозначными расход, версию и причину отказа. Смена плеча — правка конфига и рестарт.
 type Router struct {
 	Providers   map[string]Provider
 	Tasks       map[string]TaskConfig
 	Speech      map[string]Transcriber
 	SpeechTasks map[string]SpeechTaskConfig
+	OCR         map[string]Recognizer
+	OCRTasks    map[string]OCRTaskConfig
 	Observe     Observer
 }
 
 // Validate проверяет задачи потребителя до первого вызова: каждая из needs объявлена, лишних
 // нет, плечо собрано, профиль модели подтверждён и принимает конфиг задачи вместе с её кадрами.
 // nil — требований нет, задачи проверяются как текстовые; пустая карта — задачи не нужны вовсе.
-// Задачи речи проверяются все: needs их не касается.
+// Задачи речи и OCR проверяются все: needs их не касается.
 func (r *Router) Validate(needs map[string]Needs) error {
 	var errs []error
 
@@ -80,6 +82,12 @@ func (r *Router) Validate(needs map[string]Needs) error {
 		}
 	}
 
+	for _, name := range slices.Sorted(maps.Keys(r.OCRTasks)) {
+		if _, err := r.resolveOCR(name, r.OCRTasks[name]); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
 	return errors.Join(errs...)
 }
 
@@ -101,15 +109,15 @@ func (r *Router) resolve(task string, need Needs) (Route, error) {
 
 	switch {
 	case cfg.Provider == "":
-		msg = "плечо не задано"
+		msg = msgNoProvider
 	case provider == nil:
 		msg = fmt.Sprintf("плечо %q не собрано", cfg.Provider)
 	case len(cfg.Output.Schema) > 0:
 		msg = "схема в конфиге: она едет входом"
 	case cfg.AttemptTimeout < 0:
-		msg = "отрицательный срок попытки"
+		msg = msgNegativeTimeout
 	case cfg.Attempts < 0:
-		msg = "отрицательное число попыток"
+		msg = msgNegativeAttempts
 	}
 
 	if msg != "" {
@@ -299,6 +307,13 @@ func (o Options) clone() Options {
 
 	return o
 }
+
+// Отказы конфига задачи, общие у чата, речи и OCR.
+const (
+	msgNoProvider       = "плечо не задано"
+	msgNegativeTimeout  = "отрицательный срок попытки"
+	msgNegativeAttempts = "отрицательное число попыток"
+)
 
 // errRouteMissing — маршрут не разрешён: нулевой Route.
 var errRouteMissing = errors.New("маршрут не разрешён")

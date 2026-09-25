@@ -58,15 +58,15 @@ func (r *Router) resolveSpeech(task string, cfg SpeechTaskConfig) (SpeechRoute, 
 
 	switch {
 	case cfg.Provider == "":
-		msg = "плечо не задано"
+		msg = msgNoProvider
 	case provider == nil:
 		msg = fmt.Sprintf("плечо %q не собрано", cfg.Provider)
 	case cfg.Model == "":
 		msg = msgNoModel
 	case cfg.AttemptTimeout < 0:
-		msg = "отрицательный срок попытки"
+		msg = msgNegativeTimeout
 	case cfg.Attempts < 0:
-		msg = "отрицательное число попыток"
+		msg = msgNegativeAttempts
 	}
 
 	if msg != "" {
