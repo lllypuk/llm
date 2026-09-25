@@ -102,6 +102,10 @@ func loadFrames(dir string, maxFiles int) ([]frame, error) {
 		return nil, fmt.Errorf("-max-files: кадров %d, потолок %d", len(names), maxFiles)
 	}
 
+	if clashErr := textClash(names); clashErr != nil {
+		return nil, clashErr
+	}
+
 	frames := make([]frame, 0, len(names))
 
 	var errs []error

@@ -171,7 +171,13 @@ func TestOCRRefusesBeforeCalls(t *testing.T) {
 		},
 		"не картинка": {map[string][]byte{"a.png": []byte(pngFrame), "bad.png": []byte("GIF89a......")}, 5, "scan",
 			"bad.png: содержимое image/gif"},
-		"нет кадров":        {map[string][]byte{"a.txt": []byte(pngFrame)}, 5, "scan", "нет кадров"},
+		"нет кадров": {map[string][]byte{"a.txt": []byte(pngFrame)}, 5, "scan", "нет кадров"},
+		"jpg и png": {map[string][]byte{"scan.jpg": []byte(jpegFrame), "scan.png": []byte(pngFrame)}, 5, "scan",
+			"scan.jpg и scan.png пишут текст в один scan.txt"},
+		"jpg и jpeg": {map[string][]byte{"page.jpg": []byte(jpegFrame), "page.jpeg": []byte(jpegFrame)}, 5, "scan",
+			"пишут текст в один page.txt"},
+		"регистр": {map[string][]byte{"a.PNG": []byte(pngFrame), "a.png": []byte(pngFrame)}, 5, "scan",
+			"a.PNG и a.png пишут текст в один a.txt"},
 		"задачи не выбрать": {map[string][]byte{"a.png": []byte(pngFrame)}, 5, "", "в разделе ocr задач 2, нужна одна"},
 		"задача речи":       {map[string][]byte{"a.png": []byte(pngFrame)}, 5, "dictation", `"dictation" не объявлена`},
 	}
@@ -217,8 +223,9 @@ func TestOCRRequestCap(t *testing.T) {
 		t.Fatalf("обращений %d, ждали одно", n)
 	}
 
-	if out := stdout.String(); !strings.Contains(out, "- [skip] ocr b.png") {
-		t.Fatalf("второй кадр не пропущен:\n%s", out)
+	if out := stdout.String(); !strings.Contains(out, "- [skip] ocr b.png") ||
+		!strings.Contains(out, "страниц 0, попыток 1, стоимость 0.000000 RUB") {
+		t.Fatalf("второй кадр не пропущен или оплачен:\n%s", out)
 	}
 }
 

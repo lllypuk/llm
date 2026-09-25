@@ -169,6 +169,42 @@ func TestSpeechDoesNotRetryClientError(t *testing.T) {
 	}
 }
 
+// TestSpeechAudioByFailure — отказ плеча до сети и 4xx записи в расход не несут, 5xx и истёкший срок — несут.
+func TestSpeechAudioByFailure(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		err   error
+		audio int64
+	}{
+		"запрос не собран": {&llm.RequestError{Message: "адрес"}, 0},
+		"4xx":              {&llm.StatusError{Status: 400}, 0},
+		"5xx":              {&llm.StatusError{Status: 503}, 500},
+		"срок":             {context.DeadlineExceeded, 500},
+	} {
+		s := &speaker{steps: []error{tc.err}}
+		obs := &recorder{}
+		cfg := llm.SpeechTaskConfig{Provider: "asr", Model: "m", Attempts: 1}
+
+		route, _, err := speechRouter(s, cfg, obs).ResolveSpeech("dictation")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = route.Transcribe(context.Background(), halfSecond())
+
+		var call *llm.CallError
+		if !errors.As(err, &call) || s.calls != 1 {
+			t.Fatalf("%s: отказ %v, вызовов плеча %d", name, err, s.calls)
+		}
+
+		if obs.attempts[0].AudioMillis != tc.audio || call.Report.AudioMillis != tc.audio {
+			t.Errorf("%s: записи в попытке %d, в вызове %d, ждали %d",
+				name, obs.attempts[0].AudioMillis, call.Report.AudioMillis, tc.audio)
+		}
+	}
+}
+
 // TestSpeechRejectsLongAudioBeforeProvider — запись сверх профиля до плеча не доходит.
 func TestSpeechRejectsLongAudioBeforeProvider(t *testing.T) {
 	t.Parallel()

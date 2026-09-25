@@ -177,6 +177,42 @@ func TestOCRDoesNotRetryClientError(t *testing.T) {
 	}
 }
 
+// TestOCRPagesByFailure — отказ плеча до сети и 4xx страницы не несут, 5xx и истёкший срок — несут.
+func TestOCRPagesByFailure(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		err   error
+		pages int
+	}{
+		"запрос не собран": {&llm.RequestError{Message: "адрес"}, 0},
+		"4xx":              {&llm.StatusError{Status: 400}, 0},
+		"5xx":              {&llm.StatusError{Status: 503}, 1},
+		"срок":             {context.DeadlineExceeded, 1},
+	} {
+		r := &reader{steps: []error{tc.err}}
+		obs := &recorder{}
+		cfg := llm.OCRTaskConfig{Provider: "vision", Model: "page", Languages: []string{"ru"}, Attempts: 1}
+
+		route, _, err := ocrRouter(r, cfg, obs).ResolveOCR("frame")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = route.Recognize(context.Background(), frame())
+
+		var call *llm.CallError
+		if !errors.As(err, &call) || r.calls != 1 {
+			t.Fatalf("%s: отказ %v, вызовов плеча %d", name, err, r.calls)
+		}
+
+		if obs.attempts[0].Pages != tc.pages || call.Report.Pages != tc.pages {
+			t.Errorf("%s: страниц в попытке %d, в вызове %d, ждали %d",
+				name, obs.attempts[0].Pages, call.Report.Pages, tc.pages)
+		}
+	}
+}
+
 // TestOCRRejectsBeforeProvider — кадр сверх профиля и чужой MIME до плеча не доходят.
 func TestOCRRejectsBeforeProvider(t *testing.T) {
 	t.Parallel()

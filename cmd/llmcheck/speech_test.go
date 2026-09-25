@@ -253,7 +253,9 @@ func TestSpeechRefusesBeforeCalls(t *testing.T) {
 			"записей 3, потолок 2"},
 		"негодный WAV": {map[string][]byte{"a.wav": good, "bad.wav": []byte("mp3")}, 5, "dictation",
 			"bad.wav: не RIFF/WAVE"},
-		"нет записей":       {map[string][]byte{"a.txt": good}, 5, "dictation", "нет записей"},
+		"нет записей": {map[string][]byte{"a.txt": good}, 5, "dictation", "нет записей"},
+		"регистр": {map[string][]byte{"a.WAV": good, "a.wav": good}, 5, "dictation",
+			"a.WAV и a.wav пишут текст в один a.txt"},
 		"задачи не выбрать": {map[string][]byte{"a.wav": good}, 5, "", "задач 2, нужна одна"},
 		"чатовая задача":    {map[string][]byte{"a.wav": good}, 5, "ask", `"ask" не объявлена`},
 	}
@@ -299,8 +301,9 @@ func TestSpeechRequestCap(t *testing.T) {
 		t.Fatalf("обращений %d, ждали одно", n)
 	}
 
-	if out := stdout.String(); !strings.Contains(out, "- [skip] speech b.wav") {
-		t.Fatalf("вторая запись не пропущена:\n%s", out)
+	if out := stdout.String(); !strings.Contains(out, "- [skip] speech b.wav") ||
+		!strings.Contains(out, "секунд 0.00, попыток 1, стоимость 0.000000 RUB") {
+		t.Fatalf("вторая запись не пропущена или оплачена:\n%s", out)
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"slices"
 	"strconv"
 	"time"
@@ -238,7 +237,7 @@ func (r OCRRoute) once(ctx context.Context, req OCRRequest) (OCRText, time.Durat
 }
 
 // ocrMetaOf — токенов у OCR нет, их ноль известен; кадр — страница в расходе,
-// кроме доказуемого отказа до работы плеча: конфигурация, не-генерация и 4xx, кроме 408.
+// кроме доказуемого отказа до работы плеча ([refusedBeforeWork]).
 func ocrMetaOf(text OCRText, err error) attemptMeta {
 	meta := attemptMeta{usage: Usage{Known: true}}
 
@@ -255,9 +254,7 @@ func ocrMetaOf(text OCRText, err error) attemptMeta {
 		meta.requestID = status.RequestID
 	}
 
-	rejected := status != nil && status.Status >= http.StatusBadRequest &&
-		status.Status < http.StatusInternalServerError && status.Status != http.StatusRequestTimeout
-	if !rejected && !misconfigured(err) && phaseOf(err) == PhaseInference {
+	if !refusedBeforeWork(err) {
 		meta.pages = 1
 	}
 

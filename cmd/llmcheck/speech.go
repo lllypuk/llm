@@ -189,6 +189,10 @@ func loadClips(dir string, maxFiles int) ([]clip, error) {
 		return nil, fmt.Errorf("-max-files: записей %d, потолок %d", len(names), maxFiles)
 	}
 
+	if clashErr := textClash(names); clashErr != nil {
+		return nil, clashErr
+	}
+
 	clips := make([]clip, 0, len(names))
 
 	var errs []error
@@ -215,6 +219,22 @@ func loadClips(dir string, maxFiles int) ([]clip, error) {
 	}
 
 	return clips, errors.Join(errs...)
+}
+
+// textClash отбивает файлы с общей основой имени: их тексты легли бы в один *.txt.
+func textClash(names []string) error {
+	seen := make(map[string]string, len(names))
+
+	for _, name := range names {
+		stem := strings.TrimSuffix(name, filepath.Ext(name))
+		if prev, ok := seen[stem]; ok {
+			return fmt.Errorf("-dir: %s и %s пишут текст в один %s%s", prev, name, stem, textExt)
+		}
+
+		seen[stem] = name
+	}
+
+	return nil
 }
 
 // parseWAV снимает контейнер: частоту берёт из fmt, сэмплы — из data; посторонние чанки пропускает.

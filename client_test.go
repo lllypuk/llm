@@ -723,8 +723,8 @@ func TestChatCarriesAttemptReports(t *testing.T) {
 	}
 }
 
-// TestChatUsageKnownWithoutGeneration — отказ статусом и фазы до генерации расхода не несут:
-// повтор после них не делает расход вызова неизвестным, а сетевой отказ генерации делает.
+// TestChatUsageKnownWithoutGeneration — отказ статусом, фазы до генерации и несобранный плечом запрос
+// расхода не несут; сетевой отказ, 5xx и истёкший срок генерации делают расход неизвестным.
 func TestChatUsageKnownWithoutGeneration(t *testing.T) {
 	t.Parallel()
 
@@ -760,6 +760,24 @@ func TestChatUsageKnownWithoutGeneration(t *testing.T) {
 
 	if res.Report.Usage.Known || res.Attempts[0].Usage.Known {
 		t.Errorf("5xx генерации: расход %+v", res.Report.Usage)
+	}
+
+	f = &fake{steps: []step{{err: context.DeadlineExceeded}, ok("done", 2, 3)}}
+
+	res, err = client(f, nil).Chat(context.Background(), req())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if res.Report.Usage.Known || res.Attempts[0].Usage.Known {
+		t.Errorf("истёкший срок генерации: расход %+v", res.Report.Usage)
+	}
+
+	f = &fake{steps: []step{{err: &llm.RequestError{Message: "адрес"}}}}
+
+	_, err = client(f, nil).Chat(context.Background(), req())
+	if call := callError(t, err); f.count() != 1 || !call.Report.Usage.Known || !call.Attempts[0].Usage.Known {
+		t.Errorf("запрос не собран плечом: вызовов %d, отчёт %+v", f.count(), call.Report)
 	}
 }
 
