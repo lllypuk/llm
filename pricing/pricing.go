@@ -30,13 +30,15 @@ const (
 	defaultAudioMs = 1_000
 )
 
-// Rates — цена части расхода в микроединицах валюты за миллион токенов, у записи — за секунду; nil — тарифа нет.
+// Rates — цена части расхода в микроединицах валюты за миллион токенов, у записи — за секунду,
+// у OCR — за страницу; nil — тарифа нет.
 type Rates struct {
 	BillableInput *int64
 	CachedInput   *int64
 	Reasoning     *int64
 	Output        *int64
 	AudioSecond   *int64
+	Page          *int64
 }
 
 // PricePlan — тариф одной ревизии, действующий с ValidFrom до ValidFrom следующей.
@@ -108,67 +110,27 @@ func Estimate(attempt llm.AttemptReport, plan PricePlan) Cost {
 	}
 
 	u := attempt.Usage
-	parts := []struct {
-		tokens int
-		rate   *int64
-	}{
-		{u.BillableInput, plan.Rates.BillableInput},
-		{u.CachedInput, plan.Rates.CachedInput},
-		{u.Reasoning, plan.Rates.Reasoning},
-		{u.Output, plan.Rates.Output},
-	}
+	t := tally{complete: u.Known}
+	audio := func(millis, rate int64) (int64, bool) { return audioCost(millis, plan.audioStep(), rate) }
 
-	var (
-		sum      int64
-		counted  bool
-		complete = u.Known
-	)
-
-	for _, part := range parts {
-		switch {
-		case part.tokens < 0:
-			return unknown
-		case part.tokens == 0:
-			continue
-		case part.rate == nil:
-			complete = false
-
-			continue
-		}
-
-		cost, ok := mul(int64(part.tokens), *part.rate)
-		if !ok || cost > math.MaxInt64-sum {
-			return unknown
-		}
-
-		sum += cost
-		counted = true
-	}
-
-	switch {
-	case attempt.AudioMillis < 0:
-		return unknown
-	case attempt.AudioMillis == 0:
-	case plan.Rates.AudioSecond == nil:
-		complete = false
-	default:
-		cost, ok := audioCost(attempt.AudioMillis, plan.audioStep(), *plan.Rates.AudioSecond)
-		if !ok || cost > math.MaxInt64-sum {
-			return unknown
-		}
-
-		sum += cost
-		counted = true
-	}
-
-	if !counted && !complete {
+	ok := t.add(int64(u.BillableInput), plan.Rates.BillableInput, tokenCost) &&
+		t.add(int64(u.CachedInput), plan.Rates.CachedInput, tokenCost) &&
+		t.add(int64(u.Reasoning), plan.Rates.Reasoning, tokenCost) &&
+		t.add(int64(u.Output), plan.Rates.Output, tokenCost) &&
+		t.add(attempt.AudioMillis, plan.Rates.AudioSecond, audio) &&
+		t.add(int64(attempt.Pages), plan.Rates.Page, pageCost)
+	if !ok {
 		return unknown
 	}
 
-	priced.AmountMicro = ceilDiv(sum, tokensPerRate)
+	if !t.counted && !t.complete {
+		return unknown
+	}
+
+	priced.AmountMicro = ceilDiv(t.sum, tokensPerRate)
 	priced.Status = StatusEstimated
 
-	if !complete {
+	if !t.complete {
 		priced.Status = StatusPartial
 	}
 
@@ -281,6 +243,7 @@ func (r Rates) named() []namedRate {
 		{"reasoning", r.Reasoning},
 		{"output", r.Output},
 		{"audio_second", r.AudioSecond},
+		{"page", r.Page},
 	}
 }
 
@@ -305,6 +268,51 @@ func audioCost(millis, step, rate int64) (int64, bool) {
 	}
 
 	return mul(perMilli, tokensPerRate/millisPerRate)
+}
+
+// tally — сумма частей расхода в миллионных долях микроединицы.
+type tally struct {
+	sum      int64
+	counted  bool
+	complete bool
+}
+
+// add прибавляет часть расхода; ложь — отрицательный расход или переполнение, оценка неизвестна.
+func (t *tally) add(units int64, rate *int64, cost func(units, rate int64) (int64, bool)) bool {
+	switch {
+	case units < 0:
+		return false
+	case units == 0:
+		return true
+	case rate == nil:
+		t.complete = false
+
+		return true
+	}
+
+	c, ok := cost(units, *rate)
+	if !ok || c > math.MaxInt64-t.sum {
+		return false
+	}
+
+	t.sum += c
+	t.counted = true
+
+	return true
+}
+
+func tokenCost(tokens, rate int64) (int64, bool) {
+	return mul(tokens, rate)
+}
+
+// pageCost — страницы в масштабе суммы токенов, как [audioCost].
+func pageCost(pages, rate int64) (int64, bool) {
+	perPage, ok := mul(pages, rate)
+	if !ok {
+		return 0, false
+	}
+
+	return mul(perPage, tokensPerRate)
 }
 
 func mul(a, b int64) (int64, bool) {

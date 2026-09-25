@@ -93,13 +93,15 @@ type Price struct {
 	AudioStep string `json:"audio_step,omitempty"`
 }
 
-// Rates — микроединицы валюты за миллион токенов, у записи — за секунду; отсутствующее поле — тарифа нет.
+// Rates — микроединицы валюты за миллион токенов, у записи — за секунду, у OCR — за страницу;
+// отсутствующее поле — тарифа нет.
 type Rates struct {
 	BillableInput *int64 `json:"billable_input,omitempty"`
 	CachedInput   *int64 `json:"cached_input,omitempty"`
 	Reasoning     *int64 `json:"reasoning,omitempty"`
 	Output        *int64 `json:"output,omitempty"`
 	AudioSecond   *int64 `json:"audio_second,omitempty"`
+	Page          *int64 `json:"page,omitempty"`
 }
 
 // Lookup — источник переменных окружения; os.LookupEnv подходит как есть.
@@ -494,6 +496,7 @@ func plans(path string, prices []Price) ([]pricing.PricePlan, []error) {
 				Reasoning:     price.Rates.Reasoning,
 				Output:        price.Rates.Output,
 				AudioSecond:   price.Rates.AudioSecond,
+				Page:          price.Rates.Page,
 			},
 			AudioStep: step,
 		}

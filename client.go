@@ -118,6 +118,7 @@ type call struct {
 	model    string
 	outcome  string
 	audio    int64
+	pages    int
 	attempts []AttemptReport
 }
 
@@ -184,6 +185,7 @@ func (r *call) report(outcome string, class RetryClass, model string) CallReport
 		Duration:       time.Since(r.started),
 		Usage:          r.spent,
 		AudioMillis:    r.audio,
+		Pages:          r.pages,
 	}
 }
 
@@ -206,6 +208,7 @@ func (r *call) observeAttempt(
 		ServerLatency:  meta.server,
 		Usage:          meta.usage,
 		AudioMillis:    meta.audio,
+		Pages:          meta.pages,
 		Cleanup:        meta.cleanup,
 	}
 
@@ -264,6 +267,7 @@ type attemptMeta struct {
 	server    time.Duration
 	cleanup   *CleanupWarning
 	audio     int64
+	pages     int
 }
 
 // attemptMetaOf — у отказа метаданные из конверта, если он был: негодное содержимое или не-2xx.

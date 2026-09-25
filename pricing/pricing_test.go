@@ -286,3 +286,46 @@ func TestEstimateAudioWithoutRateIsUnknown(t *testing.T) {
 		t.Fatal("отрицательный шаг записи принят")
 	}
 }
+
+// TestEstimatePagesAtRate — страницы OCR по цене страницы; сумма абсолютная, чтобы масштаб не уехал молча.
+func TestEstimatePagesAtRate(t *testing.T) {
+	t.Parallel()
+
+	plan := rub("ocr", month(time.September), pricing.Rates{Page: new(int64(132_100))})
+	a := llm.AttemptReport{StartedAt: month(time.September), Usage: llm.Usage{Known: true}, Pages: 3}
+
+	want := pricing.Cost{AmountMicro: 396_300, Currency: "RUB", Revision: "ocr", Status: pricing.StatusEstimated}
+	if got := pricing.Estimate(a, plan); got != want {
+		t.Fatalf("Estimate = %+v, want %+v", got, want)
+	}
+}
+
+// TestEstimatePagesWithoutRateIsUnknown — страницы без цены — unknown; ставка страницы чат и речь не трогает.
+func TestEstimatePagesWithoutRateIsUnknown(t *testing.T) {
+	t.Parallel()
+
+	plan := rub("stt", month(time.September), pricing.Rates{AudioSecond: new(int64(10_000))})
+	a := llm.AttemptReport{StartedAt: month(time.September), Usage: llm.Usage{Known: true}, Pages: 1}
+
+	if got := pricing.Estimate(a, plan); got.Status != pricing.StatusUnknown {
+		t.Fatalf("Estimate = %+v, want unknown", got)
+	}
+
+	plan.Rates.Page = new(int64(132_100))
+	plan.Rates.Output = new(int64(1_000_000))
+
+	speech := llm.AttemptReport{StartedAt: month(time.September), Usage: llm.Usage{Known: true}, AudioMillis: 1_000}
+	if got := pricing.Estimate(speech, plan); got.Status != pricing.StatusEstimated || got.AmountMicro != 10_000 {
+		t.Fatalf("речь = %+v, want estimated 10000", got)
+	}
+
+	chat := attempt(month(time.September), llm.Usage{Output: 1_000_000, Known: true})
+	if got := pricing.Estimate(chat, plan); got.Status != pricing.StatusEstimated || got.AmountMicro != 1_000_000 {
+		t.Fatalf("чат = %+v, want estimated 1000000", got)
+	}
+
+	plan.Rates.Page = new(int64(-1))
+	if plan.Validate() == nil {
+		t.Fatal("отрицательная цена страницы принята")
+	}
+}

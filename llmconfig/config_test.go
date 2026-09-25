@@ -499,3 +499,27 @@ func TestSpeechAndChatProvidersDoNotMix(t *testing.T) {
 		}
 	}
 }
+
+// TestPagePriceReachesPlan — цена страницы из JSON доезжает до тарифа.
+func TestPagePriceReachesPlan(t *testing.T) {
+	t.Parallel()
+
+	data := `{
+	  "providers": {"local": {"kind": "ollama", "endpoint": "http://o"}},
+	  "tasks": {"ask": {"provider": "local", "model": "gemma"}},
+	  "prices": {
+	    "ocr": [{"revision": "2026-09", "currency": "RUB", "valid_from": "2026-09-01T00:00:00+03:00",
+	             "rates": {"page": 132100}}]
+	  }
+	}`
+
+	cfg, err := llmconfig.Load([]byte(data), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	plans, err := cfg.PricePlans("ocr")
+	if err != nil || plans[0].Rates.Page == nil || *plans[0].Rates.Page != 132_100 {
+		t.Fatalf("тариф %+v, %v", plans, err)
+	}
+}

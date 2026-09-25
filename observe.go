@@ -42,11 +42,13 @@ type AttemptReport struct {
 	Usage          Usage
 	// AudioMillis — запись, отправленная плечу речи; у чата ноль.
 	AudioMillis int64
-	Cleanup     *CleanupWarning
+	// Pages — страницы, отправленные плечу OCR; у чата и речи ноль.
+	Pages   int
+	Cleanup *CleanupWarning
 }
 
 // CallReport — вызов целиком: исход, класс отказа, число попыток, расход всех попыток,
-// у речи — и запись всех попыток.
+// у речи — и запись, у OCR — и страницы всех попыток.
 type CallReport struct {
 	CallID         string
 	Provider       string
@@ -59,6 +61,7 @@ type CallReport struct {
 	Duration       time.Duration
 	Usage          Usage
 	AudioMillis    int64
+	Pages          int
 }
 
 // Observer — приёмник отчётов: быстрый и потокобезопасный, зовётся синхронно
