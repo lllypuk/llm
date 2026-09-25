@@ -3,7 +3,7 @@
 Вызов языковой модели одним контрактом поверх нескольких плеч. Корень пакета — контракт,
 повторы, бюджет времени, классы отказа и наблюдатель; протокол поставщика — в подпакете.
 Есть `ollama` (нативный `/api/chat`), `gigachat` (OAuth, `/files`) и `yandex` (OpenAI-совместимый `chat/completions`);
-распознавание речи — `yandex.NewSpeech` (SpeechKit) и `salutespeech`.
+распознавание речи — `yandex.NewSpeech` (SpeechKit) и `salutespeech`, текста — `yandex.NewOCR` (Vision OCR).
 
 ```go
 c := llm.New(ollama.New("http://localhost:11434"), 90*time.Second)
@@ -122,6 +122,32 @@ res, err := route.Transcribe(ctx, llm.SpeechInput{CallID: id, SampleRate: 16000,
 - Пустой `Transcript.Text` — не ошибка: что тишина, решает потребитель.
 - `llmcheck speech -config llm.json -dir записи/` прогоняет каталог `*.wav` по маршруту: задержка,
   секунды и стоимость в протокол, текст — в `*.txt` рядом с записью. Качество сравнивается глазами.
+
+## Распознавание текста
+
+Третий контракт — `Recognizer`, устроен как речь: свои плечи, раздел `ocr` в `llmconfig`, маршрут и цикл
+попыток на общих паузах, сроке и классах отказа. Вход — один кадр JPEG или PNG; **PDF растеризует
+потребитель** (страница — кадр), библиотека его не принимает.
+
+```go
+routes, err := cfg.OCRRoutes() // "ocr": {"scan": {"provider": "vision", "model": "page", "languages": ["ru", "en"]}}
+router := &llm.Router{OCR: map[string]llm.Recognizer{"vision": ocr}, OCRTasks: routes}
+route, ok, err := router.ResolveOCR("scan")
+res, err := route.Recognize(ctx, llm.OCRInput{CallID: id, Image: jpeg, MIME: llm.MIMEJPEG})
+```
+
+- Раздел `ocr` необязателен: без него `ResolveOCR` даёт `false` без ошибки. `languages` обязательны;
+  плечо `visionocr` годится только задачам OCR, чатовое и речевое у задачи OCR — ошибка разбора.
+- `yandex.NewOCR` шлёт `x-data-logging-enabled: false` всегда: в кадрах чеки и документы людей,
+  логирование у Яндекса выключено без настройки.
+- Кадр больше `OCRCapabilities.MaxBytes` (у `page` — 10 МБ) отбивается до сети классом `never`.
+- Расход — страницы: `Pages` в отчётах, тариф `page` за страницу. Отказ 5xx или сроком оплачивается,
+  4xx — нет. `OCRDescriptor.Fingerprint` — вид плеча, модель и языки, без имени плеча и тарифа.
+- Лимит Vision — запрос в секунду на облако, а не на процесс: `429` переживается паузой, темп задаёт
+  очередь потребителя.
+- Пустой `Text` — успех: текста на кадре нет.
+- `llmcheck ocr -config llm.json -dir кадры/` прогоняет каталог `*.jpg` и `*.png`: задержка, страницы и
+  стоимость в протокол, текст — в `*.txt` рядом с кадром.
 
 ## Что остаётся потребителю
 

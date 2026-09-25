@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.6.0
+
+Распознавание текста — третий контракт по образцу речи; чатовый `Router`, `Provider` и речь не меняются.
+
+- `Recognizer`, `OCRRequest` (кадр JPEG или PNG; PDF растеризует потребитель), `OCRText`;
+  `OCRCapabilities.MaxBytes` отбивает крупный кадр до плеча.
+- `yandex.NewOCR` — Vision OCR `recognizeText`, модель `page`; `x-data-logging-enabled: false` в каждом
+  запросе, тело ответа до 8 МБ.
+- `Router.OCR`, `Router.OCRTasks`, `ResolveOCR` — `false` без ошибки, если задача не объявлена;
+  у `OCRRoute.Recognize` свой цикл попыток. `OCRDescriptor.Fingerprint` — вид, модель и языки, версия `ocr/1`.
+- `llmconfig`: вид `visionocr`, необязательный раздел `ocr` с обязательными `languages`; плечо OCR вне
+  раздела `ocr` и чужое плечо в нём — ошибка разбора. `Config.OCRRoutes`.
+- Отчёты: `Pages` у попытки и вызова; токены OCR — известный ноль. Отказ 5xx или сроком идёт в расход, 4xx — нет.
+- `pricing`: `Rates.Page` — тариф за страницу; записи без цены — `unknown`.
+- `cmd/llmcheck ocr`: каталог `*.jpg` и `*.png` по маршруту OCR — задержка, страницы, стоимость; текст —
+  рядом в `*.txt`. Чатовые и речевая проверки раздел `ocr` не собирают.
+
 ## v0.5.0
 
 Распознавание речи — свой контракт и свои маршруты; чатовый `Router` и `Provider` не меняются.
