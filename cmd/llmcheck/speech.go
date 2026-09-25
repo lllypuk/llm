@@ -296,6 +296,7 @@ func prepareSpeech(data []byte, o speechOptions, lookup llmconfig.Lookup) (*runn
 	}
 
 	cfg.Tasks = nil
+	cfg.OCR = nil
 	maps.DeleteFunc(cfg.Speech, func(name string, _ llmconfig.SpeechTask) bool { return name != task })
 
 	if err = cfg.Expand(lookup); err != nil {

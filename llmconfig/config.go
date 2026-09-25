@@ -24,14 +24,17 @@ const (
 
 	KindSpeechKit    = "speechkit"
 	KindSaluteSpeech = "salutespeech"
+
+	KindVisionOCR = "visionocr"
 )
 
 // Config — файл маршрутов целиком. Повреждённый не заменяется ничем: запасного конфига нет.
-// Раздел speech необязателен: без него речь выключена.
+// Разделы speech и ocr необязательны: без них речь и OCR выключены.
 type Config struct {
 	Providers map[string]Provider   `json:"providers"`
 	Tasks     map[string]Task       `json:"tasks"`
 	Speech    map[string]SpeechTask `json:"speech,omitempty"`
+	OCR       map[string]OCRTask    `json:"ocr,omitempty"`
 	Prices    map[string][]Price    `json:"prices,omitempty"`
 }
 
@@ -74,6 +77,16 @@ type SpeechTask struct {
 	AttemptTimeout string `json:"attempt_timeout,omitempty"`
 	Attempts       int    `json:"attempts,omitempty"`
 	PricePlan      string `json:"price_plan,omitempty"`
+}
+
+// OCRTask — привязка задачи OCR к плечу распознавания текста; языки обязательны.
+type OCRTask struct {
+	Provider       string   `json:"provider"`
+	Model          string   `json:"model"`
+	Languages      []string `json:"languages"`
+	AttemptTimeout string   `json:"attempt_timeout,omitempty"`
+	Attempts       int      `json:"attempts,omitempty"`
+	PricePlan      string   `json:"price_plan,omitempty"`
 }
 
 // Output — форма ответа без схемы: схема — артефакт потребителя.
@@ -162,6 +175,11 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Errorf("%s.provider: плечо %q не объявлено", path, task.Provider))
 		case speechKind(p.Kind):
 			errs = append(errs, fmt.Errorf("%s.provider: плечо %q распознаёт речь, а не отвечает", path, task.Provider))
+		case ocrKind(p.Kind):
+			errs = append(
+				errs,
+				fmt.Errorf("%s.provider: плечо %q распознаёт текст, а не отвечает", path, task.Provider),
+			)
 		}
 
 		errs = append(errs, c.checkPrice(path, task.PricePlan)...)
@@ -187,6 +205,23 @@ func (c *Config) Validate() error {
 		errs = append(errs, taskErrs...)
 	}
 
+	for _, name := range slices.Sorted(maps.Keys(c.OCR)) {
+		path := "ocr." + name
+		task := c.OCR[name]
+
+		switch p, ok := c.Providers[task.Provider]; {
+		case !ok:
+			errs = append(errs, fmt.Errorf("%s.provider: плечо %q не объявлено", path, task.Provider))
+		case !ocrKind(p.Kind):
+			errs = append(errs, fmt.Errorf("%s.provider: плечо %q не распознаёт текст", path, task.Provider))
+		}
+
+		errs = append(errs, c.checkPrice(path, task.PricePlan)...)
+
+		_, taskErrs := task.route(path)
+		errs = append(errs, taskErrs...)
+	}
+
 	for _, name := range slices.Sorted(maps.Keys(c.Prices)) {
 		_, priceErrs := plans("prices."+name, c.Prices[name])
 		errs = append(errs, priceErrs...)
@@ -203,7 +238,7 @@ func (c *Config) checkPrice(path, plan string) []error {
 	return nil
 }
 
-// Active — плечи, на которые ссылается хотя бы одна задача чата или речи, по имени.
+// Active — плечи, на которые ссылается хотя бы одна задача чата, речи или OCR, по имени.
 func (c *Config) Active() []string {
 	var names []string
 
@@ -218,6 +253,10 @@ func (c *Config) Active() []string {
 	}
 
 	for _, task := range c.Speech {
+		add(task.Provider)
+	}
+
+	for _, task := range c.OCR {
 		add(task.Provider)
 	}
 
@@ -274,6 +313,21 @@ func (c *Config) SpeechRoutes() (map[string]llm.SpeechTaskConfig, error) {
 
 	for name, task := range c.Speech {
 		route, taskErrs := task.route("speech." + name)
+		routes[name] = route
+		errs = append(errs, taskErrs...)
+	}
+
+	return routes, errors.Join(errs...)
+}
+
+// OCRRoutes — задачи OCR маршрутизатора; пустая карта — раздела нет. Ошибка — конфиг не прошёл бы Validate.
+func (c *Config) OCRRoutes() (map[string]llm.OCRTaskConfig, error) {
+	routes := make(map[string]llm.OCRTaskConfig, len(c.OCR))
+
+	var errs []error
+
+	for name, task := range c.OCR {
+		route, taskErrs := task.route("ocr." + name)
 		routes[name] = route
 		errs = append(errs, taskErrs...)
 	}
@@ -344,7 +398,7 @@ func (p Provider) validate(path string) []error {
 	case KindOllama:
 	case KindGigaChat, KindSaluteSpeech:
 		required = []string{oauthEndpointField, "scope", gigachatAuthField}
-	case KindYandex, KindSpeechKit:
+	case KindYandex, KindSpeechKit, KindVisionOCR:
 		required = []string{"folder", yandexAuthField}
 	default:
 		return append(errs, fmt.Errorf("%s.kind: неизвестный вид плеча %q", path, p.Kind))
@@ -431,6 +485,36 @@ func (t SpeechTask) route(path string) (llm.SpeechTaskConfig, []error) {
 
 	if t.Model == "" {
 		errs = append(errs, fmt.Errorf("%s.model: модель не задана", path))
+	}
+
+	route.AttemptTimeout, errs = budget(path, t.AttemptTimeout, t.Attempts, errs)
+
+	return route, errs
+}
+
+// ocrKind — плечо распознавания текста: годится только задачам раздела ocr.
+func ocrKind(kind string) bool { return kind == KindVisionOCR }
+
+func (t OCRTask) route(path string) (llm.OCRTaskConfig, []error) {
+	route := llm.OCRTaskConfig{
+		Provider:  t.Provider,
+		Model:     t.Model,
+		Languages: slices.Clone(t.Languages),
+		Attempts:  t.Attempts,
+		PricePlan: t.PricePlan,
+	}
+
+	var errs []error
+
+	if t.Model == "" {
+		errs = append(errs, fmt.Errorf("%s.model: модель не задана", path))
+	}
+
+	switch {
+	case len(t.Languages) == 0:
+		errs = append(errs, fmt.Errorf("%s.languages: языки не заданы", path))
+	case slices.Contains(t.Languages, ""):
+		errs = append(errs, fmt.Errorf("%s.languages: пустой язык", path))
 	}
 
 	route.AttemptTimeout, errs = budget(path, t.AttemptTimeout, t.Attempts, errs)
