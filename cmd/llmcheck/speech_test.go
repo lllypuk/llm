@@ -176,8 +176,8 @@ func writeClips(t *testing.T, clips map[string][]byte) string {
 	return dir
 }
 
-func speechOpts(config, dir string) speechOptions {
-	return speechOptions{
+func speechOpts(config, dir string) dirOptions {
+	return dirOptions{
 		config:      config,
 		dir:         dir,
 		task:        "dictation",

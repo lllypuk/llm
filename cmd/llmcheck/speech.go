@@ -46,7 +46,7 @@ const (
 	chunkAlign = 2
 )
 
-type speechOptions struct {
+type dirOptions struct {
 	config      string
 	dir         string
 	task        string
@@ -77,23 +77,29 @@ func speechMain(ctx context.Context, args []string, stdout, stderr io.Writer, lo
 	return runSpeech(ctx, o, stdout, stderr, lookup)
 }
 
-func parseSpeechFlags(args []string, stderr io.Writer) (speechOptions, error) {
-	fs := flag.NewFlagSet("llmcheck speech", flag.ContinueOnError)
+func parseSpeechFlags(args []string, stderr io.Writer) (dirOptions, error) {
+	return parseDirFlags(cmdSpeech, "каталог с записями *.wav: LPCM 16 бит моно; текст ляжет рядом в *.txt",
+		args, stderr)
+}
+
+// parseDirFlags — флаги подкоманды, которая гонит каталог файлов по одной задаче своего раздела.
+func parseDirFlags(cmd, dirUsage string, args []string, stderr io.Writer) (dirOptions, error) {
+	fs := flag.NewFlagSet("llmcheck "+cmd, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
-	var o speechOptions
+	var o dirOptions
 
 	fs.StringVar(&o.config, "config", "", "файл маршрутов llmconfig; секреты — из окружения")
-	fs.StringVar(&o.dir, "dir", "", "каталог с записями *.wav: LPCM 16 бит моно; текст ляжет рядом в *.txt")
-	fs.StringVar(&o.task, "task", "", "задача раздела speech; пусто — единственная объявленная")
-	fs.IntVar(&o.maxFiles, "max-files", defaultMaxFiles, "потолок числа записей: больше — отказ до первого вызова")
+	fs.StringVar(&o.dir, "dir", "", dirUsage)
+	fs.StringVar(&o.task, "task", "", "задача раздела "+cmd+"; пусто — единственная объявленная")
+	fs.IntVar(&o.maxFiles, "max-files", defaultMaxFiles, "потолок числа файлов: больше — отказ до первого вызова")
 	fs.IntVar(&o.maxRequests, "max-requests", defaultMaxRequests, "потолок обращений к плечу, включая повторы")
 	fs.Int64Var(&o.maxCost, "max-cost", defaultMaxCost,
-		"порог оценённого расхода в микроединицах валюты: следующая запись за ним не отправляется")
+		"порог оценённого расхода в микроединицах валюты: следующий файл за ним не отправляется")
 	fs.DurationVar(&o.timeout, "timeout", defaultTimeout, "срок прогона целиком")
 
 	if err := fs.Parse(args); err != nil {
-		return speechOptions{}, err
+		return dirOptions{}, err
 	}
 
 	var errs []error
@@ -107,7 +113,7 @@ func parseSpeechFlags(args []string, stderr io.Writer) (speechOptions, error) {
 	}
 
 	if o.dir == "" {
-		errs = append(errs, errors.New("-dir: каталог записей не задан"))
+		errs = append(errs, errors.New("-dir: каталог не задан"))
 	}
 
 	if o.maxFiles <= 0 {
@@ -129,7 +135,7 @@ func parseSpeechFlags(args []string, stderr io.Writer) (speechOptions, error) {
 	return o, errors.Join(errs...)
 }
 
-func runSpeech(ctx context.Context, o speechOptions, stdout, stderr io.Writer, lookup llmconfig.Lookup) int {
+func runSpeech(ctx context.Context, o dirOptions, stdout, stderr io.Writer, lookup llmconfig.Lookup) int {
 	ctx, cancel := context.WithTimeout(ctx, o.timeout)
 	defer cancel()
 
@@ -274,32 +280,13 @@ func parseFmt(chunk []byte) (int, error) {
 	return rate, nil
 }
 
-// prepareSpeech оставляет в конфиге одну задачу речи и собирает её плечо за общим счётчиком.
-func prepareSpeech(data []byte, o speechOptions, lookup llmconfig.Lookup) (*runner, llm.SpeechRoute, error) {
-	cfg, err := llmconfig.Parse(data)
+// prepareSpeech собирает плечо выбранной задачи речи за общим счётчиком.
+//
+//nolint:dupl // близнец prepareOCR: типы плеча и маршрута разные
+func prepareSpeech(data []byte, o dirOptions, lookup llmconfig.Lookup) (*runner, llm.SpeechRoute, error) {
+	cfg, task, err := narrowConfig(data, lookup, cmdSpeech, "речи", o.task,
+		func(c *llmconfig.Config) *map[string]llmconfig.SpeechTask { return &c.Speech })
 	if err != nil {
-		return nil, llm.SpeechRoute{}, err
-	}
-
-	task := o.task
-	if task == "" {
-		declared := slices.Sorted(maps.Keys(cfg.Speech))
-		if len(declared) != 1 {
-			return nil, llm.SpeechRoute{}, fmt.Errorf("-task: в разделе speech задач %d, нужна одна", len(declared))
-		}
-
-		task = declared[0]
-	}
-
-	if _, ok := cfg.Speech[task]; !ok {
-		return nil, llm.SpeechRoute{}, fmt.Errorf("-task: задача речи %q не объявлена", task)
-	}
-
-	cfg.Tasks = nil
-	cfg.OCR = nil
-	maps.DeleteFunc(cfg.Speech, func(name string, _ llmconfig.SpeechTask) bool { return name != task })
-
-	if err = cfg.Expand(lookup); err != nil {
 		return nil, llm.SpeechRoute{}, err
 	}
 
@@ -308,22 +295,13 @@ func prepareSpeech(data []byte, o speechOptions, lookup llmconfig.Lookup) (*runn
 		return nil, llm.SpeechRoute{}, err
 	}
 
-	r := &runner{
-		cfg:     cfg,
-		tasks:   []string{task},
-		meter:   &meter{limit: o.maxRequests},
-		maxCost: o.maxCost,
-		spent:   map[string]int64{},
-		router:  &llm.Router{Speech: map[string]llm.Transcriber{}, SpeechTasks: routes},
-	}
+	r := dirRunner(cfg, task, o, &llm.Router{Speech: map[string]llm.Transcriber{}, SpeechTasks: routes})
 
-	for _, name := range cfg.Active() {
-		t, buildErr := buildSpeech(cfg.Providers[name])
-		if buildErr != nil {
-			return nil, llm.SpeechRoute{}, fmt.Errorf("providers.%s: %w", name, buildErr)
-		}
-
+	err = buildActive(cfg, buildSpeech, func(name string, t llm.Transcriber) {
 		r.router.Speech[name] = countedSpeech{Transcriber: t, meter: r.meter}
+	})
+	if err != nil {
+		return nil, llm.SpeechRoute{}, err
 	}
 
 	route, _, err := r.router.ResolveSpeech(task)
@@ -332,6 +310,77 @@ func prepareSpeech(data []byte, o speechOptions, lookup llmconfig.Lookup) (*runn
 	}
 
 	return r, route, nil
+}
+
+// dirRunner — прогон одной задачи со своими потолками обращений и расхода.
+func dirRunner(cfg *llmconfig.Config, task string, o dirOptions, router *llm.Router) *runner {
+	return &runner{
+		cfg:     cfg,
+		tasks:   []string{task},
+		meter:   &meter{limit: o.maxRequests},
+		maxCost: o.maxCost,
+		spent:   map[string]int64{},
+		router:  router,
+	}
+}
+
+// buildActive собирает плечи, на которые ссылаются задачи конфига, и отдаёт каждое в put.
+func buildActive[T any](cfg *llmconfig.Config, build func(llmconfig.Provider) (T, error), put func(string, T)) error {
+	for _, name := range cfg.Active() {
+		p, err := build(cfg.Providers[name])
+		if err != nil {
+			return fmt.Errorf("providers.%s: %w", name, err)
+		}
+
+		put(name, p)
+	}
+
+	return nil
+}
+
+// narrowConfig оставляет в конфиге одну задачу раздела: плечи прочих задач не собираются, их ключи не читаются.
+func narrowConfig[T any](data []byte, lookup llmconfig.Lookup, section, noun, task string,
+	tasks func(*llmconfig.Config) *map[string]T,
+) (*llmconfig.Config, string, error) {
+	cfg, err := llmconfig.Parse(data)
+	if err != nil {
+		return nil, "", err
+	}
+
+	declared := tasks(cfg)
+
+	task, err = pickTask(section, noun, task, *declared)
+	if err != nil {
+		return nil, "", err
+	}
+
+	kept := (*declared)[task]
+	cfg.Tasks, cfg.Speech, cfg.OCR = nil, nil, nil
+	*declared = map[string]T{task: kept}
+
+	if err = cfg.Expand(lookup); err != nil {
+		return nil, "", err
+	}
+
+	return cfg, task, nil
+}
+
+// pickTask — задача из -task или единственная объявленная в разделе.
+func pickTask[T any](section, noun, task string, declared map[string]T) (string, error) {
+	if task == "" {
+		names := slices.Sorted(maps.Keys(declared))
+		if len(names) != 1 {
+			return "", fmt.Errorf("-task: в разделе %s задач %d, нужна одна", section, len(names))
+		}
+
+		return names[0], nil
+	}
+
+	if _, ok := declared[task]; !ok {
+		return "", fmt.Errorf("-task: задача %s %q не объявлена", noun, task)
+	}
+
+	return task, nil
 }
 
 func buildSpeech(p llmconfig.Provider) (llm.Transcriber, error) {
@@ -390,7 +439,7 @@ func (c countedSpeech) Transcribe(ctx context.Context, req llm.SpeechRequest) (l
 }
 
 // speechHeader — шапка протокола без секретов, путей и текста записей.
-func (r *runner) speechHeader(data []byte, o speechOptions, route llm.SpeechRoute, files int) {
+func (r *runner) speechHeader(data []byte, o dirOptions, route llm.SpeechRoute, files int) {
 	sum := sha256.Sum256(data)
 	desc := route.Descriptor()
 
