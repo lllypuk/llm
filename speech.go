@@ -68,5 +68,5 @@ type Transcript struct {
 	AudioMillis int64
 }
 
-// msgNoModel — отказ запроса и маршрута без модели, у чата и у речи один.
+// msgNoModel — отказ запроса и маршрута без модели, один у чата, речи и OCR.
 const msgNoModel = "модель не задана"

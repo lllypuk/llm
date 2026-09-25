@@ -139,13 +139,15 @@ func writeSpeechConfig(t *testing.T, endpoint string) string {
     "local": {"kind": "ollama", "endpoint": "http://ollama.invalid"},
     "stt": {"kind": "speechkit", "endpoint": "`+endpoint+`", "folder": "b1g", "auth": {"api_key": "${STT_KEY}"}},
     "salute": {"kind": "salutespeech", "endpoint": "https://salute.invalid", "oauth_endpoint": "https://oauth.invalid",
-               "scope": "SALUTE_SPEECH_PERS", "auth": {"authorization_key": "${SALUTE_KEY_UNSET}"}}
+               "scope": "SALUTE_SPEECH_PERS", "auth": {"authorization_key": "${SALUTE_KEY_UNSET}"}},
+    "vision": {"kind": "visionocr", "endpoint": "https://ocr.invalid", "folder": "b1g", "auth": {"api_key": "${OCR_KEY_UNSET}"}}
   },
   "tasks": {"ask": {"provider": "local", "model": "gemma"}},
   "speech": {
     "dictation": {"provider": "stt", "model": "general", "language": "ru-RU", "attempts": 1, "price_plan": "stt"},
     "backup": {"provider": "salute", "model": "general"}
   },
+  "ocr": {"scan": {"provider": "vision", "model": "page", "languages": ["ru", "en"]}},
   "prices": {
     "stt": [{"revision": "stt-1", "currency": "RUB", "valid_from": "2026-01-01T00:00:00Z",
              "audio_step": "15s", "rates": {"audio_second": 10667}}]
@@ -174,8 +176,8 @@ func writeClips(t *testing.T, clips map[string][]byte) string {
 	return dir
 }
 
-func speechOpts(config, dir string) speechOptions {
-	return speechOptions{
+func speechOpts(config, dir string) dirOptions {
+	return dirOptions{
 		config:      config,
 		dir:         dir,
 		task:        "dictation",
@@ -217,7 +219,7 @@ func TestSpeechRun(t *testing.T) {
 		}
 	}
 
-	for _, leak := range []string{spokenText, testAPIKey, dir, "salute", "gemma"} {
+	for _, leak := range []string{spokenText, testAPIKey, dir, "salute", "gemma", "vision"} {
 		if strings.Contains(out, leak) {
 			t.Errorf("в протокол попало %q:\n%s", leak, out)
 		}
@@ -251,7 +253,9 @@ func TestSpeechRefusesBeforeCalls(t *testing.T) {
 			"записей 3, потолок 2"},
 		"негодный WAV": {map[string][]byte{"a.wav": good, "bad.wav": []byte("mp3")}, 5, "dictation",
 			"bad.wav: не RIFF/WAVE"},
-		"нет записей":       {map[string][]byte{"a.txt": good}, 5, "dictation", "нет записей"},
+		"нет записей": {map[string][]byte{"a.txt": good}, 5, "dictation", "нет записей"},
+		"регистр": {map[string][]byte{"a.WAV": good, "a.wav": good}, 5, "dictation",
+			"a.WAV и a.wav пишут текст в один a.txt"},
 		"задачи не выбрать": {map[string][]byte{"a.wav": good}, 5, "", "задач 2, нужна одна"},
 		"чатовая задача":    {map[string][]byte{"a.wav": good}, 5, "ask", `"ask" не объявлена`},
 	}
@@ -297,8 +301,9 @@ func TestSpeechRequestCap(t *testing.T) {
 		t.Fatalf("обращений %d, ждали одно", n)
 	}
 
-	if out := stdout.String(); !strings.Contains(out, "- [skip] speech b.wav") {
-		t.Fatalf("вторая запись не пропущена:\n%s", out)
+	if out := stdout.String(); !strings.Contains(out, "- [skip] speech b.wav") ||
+		!strings.Contains(out, "секунд 0.00, попыток 1, стоимость 0.000000 RUB") {
+		t.Fatalf("вторая запись не пропущена или оплачена:\n%s", out)
 	}
 }
 
@@ -350,7 +355,7 @@ func TestParseSpeechFlags(t *testing.T) {
 	}
 }
 
-// TestChatIgnoresSpeech — чатовые проверки не собирают плечи речи и не читают их ключи.
+// TestChatIgnoresSpeech — чатовые проверки не собирают плечи речи и OCR и не читают их ключи.
 func TestChatIgnoresSpeech(t *testing.T) {
 	t.Parallel()
 
@@ -360,16 +365,18 @@ func TestChatIgnoresSpeech(t *testing.T) {
 	config := writeFile(t, `{
   "providers": {
     "local": {"kind": "ollama", "endpoint": "`+srv.URL+`"},
-    "stt": {"kind": "speechkit", "endpoint": "https://stt.invalid", "folder": "f", "auth": {"api_key": "${UNSET}"}}
+    "stt": {"kind": "speechkit", "endpoint": "https://stt.invalid", "folder": "f", "auth": {"api_key": "${UNSET}"}},
+    "vision": {"kind": "visionocr", "endpoint": "https://ocr.invalid", "folder": "f", "auth": {"api_key": "${UNSET}"}}
   },
   "tasks": {"ask": {"provider": "local", "model": "gemma", "output": {"mode": "json"}}},
-  "speech": {"dictation": {"provider": "stt", "model": "general"}}
+  "speech": {"dictation": {"provider": "stt", "model": "general"}},
+  "ocr": {"scan": {"provider": "vision", "model": "page", "languages": ["ru"]}}
 }`)
 
 	var stdout, stderr bytes.Buffer
 
 	code := dispatch(context.Background(), []string{"-config", config, "-checks", checkModel}, &stdout, &stderr, noEnv)
-	if code != exitOK || strings.Contains(stdout.String(), "stt") {
+	if out := stdout.String(); code != exitOK || strings.Contains(out, "stt") || strings.Contains(out, "vision") {
 		t.Fatalf("код %d, stderr %s\n%s", code, stderr.String(), stdout.String())
 	}
 }

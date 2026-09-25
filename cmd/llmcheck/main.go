@@ -82,10 +82,15 @@ func main() {
 	os.Exit(code)
 }
 
-// dispatch — подкоманда speech или проверки чата.
+// dispatch — подкоманда speech, ocr или проверки чата.
 func dispatch(ctx context.Context, args []string, stdout, stderr io.Writer, lookup llmconfig.Lookup) int {
-	if len(args) > 0 && args[0] == cmdSpeech {
-		return speechMain(ctx, args[1:], stdout, stderr, lookup)
+	if len(args) > 0 {
+		switch args[0] {
+		case cmdSpeech:
+			return speechMain(ctx, args[1:], stdout, stderr, lookup)
+		case cmdOCR:
+			return ocrMain(ctx, args[1:], stdout, stderr, lookup)
+		}
 	}
 
 	opts, err := parseFlags(args, stderr)
@@ -225,8 +230,9 @@ func prepare(data []byte, o options, lookup llmconfig.Lookup) (*runner, error) {
 
 	maps.DeleteFunc(cfg.Tasks, func(name string, _ llmconfig.Task) bool { return !slices.Contains(selected, name) })
 
-	// Плечи речи чатовым проверкам не собираются, и их ключи не читаются.
+	// Плечи речи и OCR чатовым проверкам не собираются, и их ключи не читаются.
 	cfg.Speech = nil
+	cfg.OCR = nil
 
 	if err = cfg.Expand(lookup); err != nil {
 		return nil, err

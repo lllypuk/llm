@@ -113,6 +113,19 @@ func misconfigured(err error) bool {
 	return errors.As(err, &config) || errors.As(err, &verify)
 }
 
+// refusedBeforeWork — доказуемый отказ до работы плеча: негодный запрос, конфигурация, не-генерация
+// и 4xx, кроме 408. 5xx и 408 могли прийти после работы, их расход неизвестен.
+func refusedBeforeWork(err error) bool {
+	var request *RequestError
+
+	var status *StatusError
+
+	rejected := errors.As(err, &status) && status.Status >= http.StatusBadRequest &&
+		status.Status < http.StatusInternalServerError && status.Status != http.StatusRequestTimeout
+
+	return rejected || errors.As(err, &request) || misconfigured(err) || phaseOf(err) != PhaseInference
+}
+
 // PhaseError помечает фазой любую причину — сеть при OAuth, отказ загрузки кадра.
 type PhaseError struct {
 	Phase Phase

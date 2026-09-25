@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"time"
 )
 
@@ -58,15 +57,15 @@ func (r *Router) resolveSpeech(task string, cfg SpeechTaskConfig) (SpeechRoute, 
 
 	switch {
 	case cfg.Provider == "":
-		msg = "плечо не задано"
+		msg = msgNoProvider
 	case provider == nil:
 		msg = fmt.Sprintf("плечо %q не собрано", cfg.Provider)
 	case cfg.Model == "":
 		msg = msgNoModel
 	case cfg.AttemptTimeout < 0:
-		msg = "отрицательный срок попытки"
+		msg = msgNegativeTimeout
 	case cfg.Attempts < 0:
-		msg = "отрицательное число попыток"
+		msg = msgNegativeAttempts
 	}
 
 	if msg != "" {
@@ -224,7 +223,7 @@ func (r SpeechRoute) once(ctx context.Context, req SpeechRequest) (Transcript, t
 }
 
 // speechMetaOf — токенов у речи нет, их ноль известен; запись считается отправленной,
-// кроме доказуемого отказа до работы плеча: конфигурация, не-генерация и 4xx, кроме 408.
+// кроме доказуемого отказа до работы плеча ([refusedBeforeWork]).
 func speechMetaOf(tr Transcript, req SpeechRequest, err error) attemptMeta {
 	meta := attemptMeta{usage: Usage{Known: true}}
 
@@ -245,9 +244,7 @@ func speechMetaOf(tr Transcript, req SpeechRequest, err error) attemptMeta {
 		meta.requestID = status.RequestID
 	}
 
-	rejected := status != nil && status.Status >= http.StatusBadRequest &&
-		status.Status < http.StatusInternalServerError && status.Status != http.StatusRequestTimeout
-	if !rejected && !misconfigured(err) && phaseOf(err) == PhaseInference {
+	if !refusedBeforeWork(err) {
 		meta.audio = req.Duration().Milliseconds()
 	}
 

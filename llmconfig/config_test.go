@@ -499,3 +499,172 @@ func TestSpeechAndChatProvidersDoNotMix(t *testing.T) {
 		}
 	}
 }
+
+// TestPagePriceReachesPlan — цена страницы из JSON доезжает до тарифа.
+func TestPagePriceReachesPlan(t *testing.T) {
+	t.Parallel()
+
+	data := `{
+	  "providers": {"local": {"kind": "ollama", "endpoint": "http://o"}},
+	  "tasks": {"ask": {"provider": "local", "model": "gemma"}},
+	  "prices": {
+	    "ocr": [{"revision": "2026-09", "currency": "RUB", "valid_from": "2026-09-01T00:00:00+03:00",
+	             "rates": {"page": 132100}}]
+	  }
+	}`
+
+	cfg, err := llmconfig.Load([]byte(data), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	plans, err := cfg.PricePlans("ocr")
+	if err != nil || plans[0].Rates.Page == nil || *plans[0].Rates.Page != 132_100 {
+		t.Fatalf("тариф %+v, %v", plans, err)
+	}
+}
+
+const ocrConfig = `{
+  "providers": {
+    "local": {"kind": "ollama", "endpoint": "http://ollama:11434"},
+    "vision": {
+      "kind": "visionocr",
+      "endpoint": "https://ocr.api.cloud.yandex.net/ocr/v1",
+      "folder": "b1g",
+      "auth": {"api_key": "${YANDEX_API_KEY}"}
+    },
+    "idle": {"kind": "visionocr", "endpoint": "https://o", "folder": "f", "auth": {"api_key": "${IDLE_KEY}"}}
+  },
+  "tasks": {"ask": {"provider": "local", "model": "gemma"}},
+  "ocr": {
+    "scan": {"provider": "vision", "model": "page", "languages": ["ru", "en"],
+             "attempt_timeout": "20s", "attempts": 3, "price_plan": "ocr"}
+  },
+  "prices": {
+    "ocr": [{"revision": "2026-09", "currency": "RUB", "valid_from": "2026-09-01T00:00:00+03:00",
+             "rates": {"page": 132100}}]
+  }
+}`
+
+// TestOCRSectionIsOptional — без раздела ocr конфиг валиден, маршрутов OCR нет.
+func TestOCRSectionIsOptional(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := llmconfig.Load([]byte(speechConfig), (&lookup{env: map[string]string{"YANDEX_API_KEY": "k"}}).get)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	routes, err := cfg.OCRRoutes()
+	if err != nil || len(routes) != 0 {
+		t.Fatalf("OCRRoutes = %v, %v", routes, err)
+	}
+}
+
+// TestOCRRoutesAndSecrets — маршрут OCR разобран, плечо активно и его ключ читается, ключ неактивного — нет.
+func TestOCRRoutesAndSecrets(t *testing.T) {
+	t.Parallel()
+
+	env := &lookup{env: map[string]string{"YANDEX_API_KEY": "k"}}
+
+	cfg, err := llmconfig.Load([]byte(ocrConfig), env.get)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !slices.Equal(env.asked, []string{"YANDEX_API_KEY"}) {
+		t.Fatalf("спрошены %v", env.asked)
+	}
+
+	if got := cfg.Active(); !slices.Equal(got, []string{"local", "vision"}) {
+		t.Fatalf("Active = %v", got)
+	}
+
+	if cfg.Providers["vision"].Auth.APIKey.Value() != "k" {
+		t.Fatal("ключ плеча OCR не развёрнут")
+	}
+
+	routes, err := cfg.OCRRoutes()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := routes["scan"]
+	if got.Provider != "vision" || got.Model != "page" || !slices.Equal(got.Languages, []string{"ru", "en"}) ||
+		got.AttemptTimeout != 20*time.Second || got.Attempts != 3 || got.PricePlan != "ocr" {
+		t.Fatalf("маршрут %+v", got)
+	}
+}
+
+// TestOCRProvidersDoNotMix — плечо OCR годится только разделу ocr, а разделу ocr — только оно.
+func TestOCRProvidersDoNotMix(t *testing.T) {
+	t.Parallel()
+
+	data := `{
+	  "providers": {
+	    "local": {"kind": "ollama", "endpoint": "http://o"},
+	    "stt": {"kind": "speechkit", "endpoint": "https://s", "folder": "f", "auth": {"api_key": "${K}"}},
+	    "vision": {"kind": "visionocr", "endpoint": "https://v", "folder": "f", "auth": {"api_key": "${K}"}},
+	    "bare": {"kind": "visionocr", "endpoint": "https://v"}
+	  },
+	  "tasks": {"ask": {"provider": "vision", "model": "m"}},
+	  "speech": {"dictation": {"provider": "vision", "model": "general"}},
+	  "ocr": {
+	    "a": {"provider": "local", "model": "page", "languages": ["ru"]},
+	    "b": {"provider": "stt", "model": "page", "languages": ["ru"]},
+	    "c": {"provider": "vision", "model": "", "languages": [], "attempt_timeout": "soon", "attempts": -1},
+	    "d": {"provider": "vision", "model": "page", "languages": ["ru", ""], "price_plan": "nope"},
+	    "e": {"provider": "vision", "model": "page"}
+	  }
+	}`
+
+	_, err := llmconfig.Parse([]byte(data))
+	if err == nil {
+		t.Fatal("ожидался отказ")
+	}
+
+	for _, want := range []string{
+		`tasks.ask.provider: плечо "vision" распознаёт текст, а не отвечает`,
+		`speech.dictation.provider: плечо "vision" не распознаёт речь`,
+		`ocr.a.provider: плечо "local" не распознаёт текст`,
+		`ocr.b.provider: плечо "stt" не распознаёт текст`,
+		"ocr.c.model: модель не задана",
+		"ocr.c.languages: языки не заданы",
+		`ocr.c.attempt_timeout: не длительность: "soon"`,
+		"ocr.c.attempts: отрицательное число попыток",
+		"ocr.d.languages: пустой язык",
+		`ocr.d.price_plan: тариф "nope" не объявлен`,
+		"ocr.e.languages: языки не заданы",
+		"providers.bare.folder: обязательно у плеча visionocr",
+		"providers.bare.auth.api_key: обязательно у плеча visionocr",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("нет %q в\n%v", want, err)
+		}
+	}
+}
+
+// TestOCRSectionIsStrict — неизвестный ключ задачи OCR и чужой тип языков отбиваются разбором.
+func TestOCRSectionIsStrict(t *testing.T) {
+	t.Parallel()
+
+	data := `{
+	  "providers": {"vision": {"kind": "visionocr", "endpoint": "https://v", "folder": "f", "auth": {"api_key": "${K}"}}},
+	  "tasks": {},
+	  "ocr": {
+	    "a": {"provider": "vision", "model": "page", "languages": ["ru"], "language": "ru"},
+	    "b": {"provider": "vision", "model": "page", "languages": "ru"}
+	  }
+	}`
+
+	_, err := llmconfig.Parse([]byte(data))
+	if err == nil {
+		t.Fatal("ожидался отказ")
+	}
+
+	for _, want := range []string{"ocr.a.language: неизвестное поле", "ocr.b.languages: ожидается список"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("нет %q в\n%v", want, err)
+		}
+	}
+}
