@@ -390,7 +390,11 @@ func TestRejectedBeforeNetwork(t *testing.T) {
 	empty := request()
 	empty.PCM = nil
 
-	for name, req := range map[string]llm.SpeechRequest{"длинная": long, "пустая": empty} {
+	wide := request()
+	wide.SampleRate = 48000
+	wide.PCM = make([]byte, 96000*30)
+
+	for name, req := range map[string]llm.SpeechRequest{"длинная": long, "пустая": empty, "больше 2 МиБ": wide} {
 		_, err := p.Transcribe(context.Background(), req)
 
 		var reqErr *llm.RequestError

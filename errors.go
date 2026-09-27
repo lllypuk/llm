@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/lllypuk/llm/internal/httpjson"
 )
 
 // RetryClass — что делать с отказом. Немедленный повтор и повтор после паузы делает
@@ -240,6 +242,14 @@ func classify(provider, model string, err error) *CallError {
 	if errors.As(err, &request) {
 		fail.Class = RetryNever
 		fail.Message = request.Message
+
+		return fail
+	}
+
+	// Тело сверх предела на том же входе придёт снова, а попытка уже оплачена.
+	var tooLarge *httpjson.TooLargeError
+	if errors.As(err, &tooLarge) {
+		fail.Class = RetryNever
 
 		return fail
 	}

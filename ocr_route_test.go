@@ -182,13 +182,16 @@ func TestOCRPagesByFailure(t *testing.T) {
 	t.Parallel()
 
 	for name, tc := range map[string]struct {
-		err   error
-		pages int
+		err       error
+		pages     int
+		requestID string
 	}{
-		"запрос не собран": {&llm.RequestError{Message: "адрес"}, 0},
-		"4xx":              {&llm.StatusError{Status: 400}, 0},
-		"5xx":              {&llm.StatusError{Status: 503}, 1},
-		"срок":             {context.DeadlineExceeded, 1},
+		"запрос не собран": {&llm.RequestError{Message: "адрес"}, 0, ""},
+		"4xx":              {&llm.StatusError{Status: 400}, 0, ""},
+		"5xx":              {&llm.StatusError{Status: 503}, 1, ""},
+		"срок":             {context.DeadlineExceeded, 1, ""},
+		"сеть":             {errors.New("connection refused"), 1, ""},
+		"негодный ответ":   {&llm.ResponseError{RequestID: "rid"}, 1, "rid"},
 	} {
 		r := &reader{steps: []error{tc.err}}
 		obs := &recorder{}
@@ -204,6 +207,10 @@ func TestOCRPagesByFailure(t *testing.T) {
 		var call *llm.CallError
 		if !errors.As(err, &call) || r.calls != 1 {
 			t.Fatalf("%s: отказ %v, вызовов плеча %d", name, err, r.calls)
+		}
+
+		if obs.attempts[0].RequestID != tc.requestID {
+			t.Errorf("%s: RequestID попытки %q, ждали %q", name, obs.attempts[0].RequestID, tc.requestID)
 		}
 
 		if obs.attempts[0].Pages != tc.pages || call.Report.Pages != tc.pages {

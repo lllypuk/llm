@@ -185,7 +185,12 @@ type Descriptor struct {
 func (d Descriptor) Fingerprint(parts ...string) string {
 	temperature := ""
 	if d.Options.Temperature != nil {
-		temperature = strconv.FormatFloat(*d.Options.Temperature, 'g', -1, 64)
+		t := *d.Options.Temperature
+		if t == 0 {
+			t = 0 // -0 из конфига печатается "-0" и дал бы другой отпечаток того же вызова.
+		}
+
+		temperature = strconv.FormatFloat(t, 'g', -1, 64)
 	}
 
 	route := []string{

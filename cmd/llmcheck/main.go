@@ -21,6 +21,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/lllypuk/llm"
@@ -75,7 +76,7 @@ type options struct {
 }
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	code := dispatch(ctx, os.Args[1:], os.Stdout, os.Stderr, os.LookupEnv)
 
 	stop()
@@ -472,12 +473,14 @@ func (r *runner) footer() int {
 		r.printf("- потолок расхода %d мк. превышен\n", r.maxCost)
 	}
 
+	if r.incomplete {
+		r.printf("- прогон неполный: остановлен потолком или сроком\n")
+	}
+
 	switch {
 	case counts[statusFail] > 0:
 		return exitViolation
 	case r.incomplete:
-		r.printf("- прогон неполный: остановлен потолком или сроком\n")
-
 		return exitIncomplete
 	default:
 		return exitOK

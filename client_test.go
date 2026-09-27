@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/lllypuk/llm"
+	"github.com/lllypuk/llm/internal/httpjson"
 )
 
 // step — исход одной попытки фейкового плеча: результат либо ошибка.
@@ -380,6 +381,21 @@ func TestFingerprint(t *testing.T) {
 	}
 }
 
+// TestChatOversizedBodyIsNever — ответ сверх предела тела не повторяется: на том же входе он придёт снова.
+func TestChatOversizedBodyIsNever(t *testing.T) {
+	t.Parallel()
+
+	f := &fake{steps: []step{{err: &llm.ResponseError{Message: "тело", Err: &httpjson.TooLargeError{Limit: 1}}}}}
+	c := client(f, nil)
+	c.Attempts = 3
+
+	_, err := c.Chat(context.Background(), req())
+
+	if call := callError(t, err); call.Class != llm.RetryNever || f.calls != 1 {
+		t.Errorf("класс %s, вызовов %d", call.Class, f.calls)
+	}
+}
+
 // TestChatFailureCarriesReport — окончательный отказ несёт отчёт с расходом всех попыток,
 // а удача — расход попыток в Report и расход удавшейся в Usage.
 func TestChatFailureCarriesReport(t *testing.T) {
@@ -411,7 +427,7 @@ func TestChatFailureCarriesReport(t *testing.T) {
 }
 
 // TestChatRejectsBadRequestBeforeProvider — схема без схемы и пустая модель: плечо не зовётся,
-// класс never, исход вызова error.
+// класс never, исход вызова bad_request.
 func TestChatRejectsBadRequestBeforeProvider(t *testing.T) {
 	t.Parallel()
 

@@ -24,7 +24,9 @@ const Name = "salutespeech"
 
 const (
 	// maxAudio — предел синхронного `speech:recognize` у любой модели; 2 МБ при 16 кГц он не превышает.
-	maxAudio      = time.Minute
+	maxAudio = time.Minute
+	// maxBytes — предел тела того же метода: выше 16 кГц он наступает раньше срока.
+	maxBytes      = 2 << 20
 	maxResultBody = 256 << 10
 )
 
@@ -91,6 +93,12 @@ func (p *Provider) SpeechCapabilities(model string) (llm.SpeechCapabilities, boo
 func (p *Provider) Transcribe(ctx context.Context, req llm.SpeechRequest) (llm.Transcript, error) {
 	if err := req.Validate(maxAudio); err != nil {
 		return llm.Transcript{}, err
+	}
+
+	if len(req.PCM) > maxBytes {
+		return llm.Transcript{}, &llm.RequestError{
+			Message: fmt.Sprintf("запись %d байт сверх предела %d", len(req.PCM), maxBytes),
+		}
 	}
 
 	query := url.Values{"model": {req.Model}}

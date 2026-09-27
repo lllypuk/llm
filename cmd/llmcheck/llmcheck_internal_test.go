@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -397,5 +398,68 @@ func TestAnswerMatchesRejectsNegatedColor(t *testing.T) {
 		if got := answerMatches(tc.mode, tc.text, fieldColor, isRed, colorWords()...); got != tc.want {
 			t.Errorf("%s %s: %t", tc.mode, tc.text, got)
 		}
+	}
+}
+
+// flakyOllama — первый запрос отбит 503, остальные отвечает fakeOllama.
+func flakyOllama(t *testing.T) *httptest.Server {
+	t.Helper()
+
+	var calls int
+
+	inner := fakeOllama(t, &calls).Config.Handler
+
+	var failed atomic.Bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if failed.CompareAndSwap(false, true) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+
+			return
+		}
+
+		inner.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	return srv
+}
+
+// TestRetriedServerErrorIsNoViolation — 503 перед ответом законно повторён: ни model, ни finish не нарушены.
+func TestRetriedServerErrorIsNoViolation(t *testing.T) {
+	t.Parallel()
+
+	for _, check := range []string{checkModel, checkFinish} {
+		o := options{
+			config: writeConfig(t, flakyOllama(t).URL), tasks: []string{"ask"}, checks: []string{check},
+			maxRequests: defaultMaxRequests, maxCost: defaultMaxCost, timeout: time.Minute,
+		}
+
+		var stdout bytes.Buffer
+		if code := run(context.Background(), o, &stdout, io.Discard, noEnv); code != exitOK {
+			t.Errorf("%s: выход %d\n%s", check, code, stdout.String())
+		}
+	}
+}
+
+// TestDeadlineMidCallIsIncomplete — срок прогона, истёкший посреди вызова, — неполный прогон, а не нарушение.
+func TestDeadlineMidCallIsIncomplete(t *testing.T) {
+	t.Parallel()
+
+	// Тело дочитано: иначе сервер не заметит обрыв соединения и Close ждал бы обработчик вечно.
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+
+	o := options{
+		config: writeConfig(t, srv.URL), tasks: []string{"ask"}, checks: []string{checkModel},
+		maxRequests: defaultMaxRequests, maxCost: defaultMaxCost, timeout: 300 * time.Millisecond,
+	}
+
+	var stdout bytes.Buffer
+	if code := run(context.Background(), o, &stdout, io.Discard, noEnv); code != exitIncomplete {
+		t.Errorf("выход %d\n%s", code, stdout.String())
 	}
 }

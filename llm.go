@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"math"
 	"time"
 )
 
@@ -97,8 +98,9 @@ func (r Request) Validate() error {
 		msg = "неизвестный режим ответа " + string(r.Output.Mode)
 	case r.Output.Mode != ModeSchema && (r.Output.Name != "" || r.Output.Strict):
 		msg = "имя схемы и strict без режима schema"
-	case r.Options.Temperature != nil && *r.Options.Temperature < 0:
-		msg = "отрицательная температура"
+	case r.Options.Temperature != nil && (*r.Options.Temperature < 0 || math.IsNaN(*r.Options.Temperature) ||
+		math.IsInf(*r.Options.Temperature, 0)):
+		msg = "температура отрицательна или не число"
 	case r.Options.MaxOutputTokens < 0:
 		msg = "отрицательный предел ответа"
 	case r.Options.Reasoning != "" && r.Options.Reasoning != EffortLow && r.Options.Reasoning != EffortMedium &&

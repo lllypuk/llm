@@ -225,6 +225,35 @@ func TestUnansweredUploadIsUncertain(t *testing.T) {
 	}
 }
 
+// TestCancelledBeforeUploadIsCertain — загрузка, не начатая из-за истёкшего срока, файла не оставляет.
+func TestCancelledBeforeUploadIsCertain(t *testing.T) {
+	t.Parallel()
+
+	f := &files{}
+	p := provider(t, &backend{api: f.serve(t)})
+	msgs := []llm.Message{{Role: llm.RoleUser, Images: []llm.Image{jpeg("a")}}}
+	send := func(context.Context, [][]string) (llm.Result, error) { return llm.Result{}, nil }
+
+	// Токен в кеше: иначе отменённый срок оборвал бы вход, а не загрузку.
+	if _, err := p.WithFiles(context.Background(), msgs, send); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := p.WithFiles(ctx, msgs, send)
+
+	var warned *llm.WarnedError
+	if !errors.Is(err, context.Canceled) || errors.As(err, &warned) {
+		t.Fatalf("отказ %v", err)
+	}
+
+	if uploads, _ := f.state(); uploads != 1 {
+		t.Errorf("загрузок %d, ждали одну до отмены", uploads)
+	}
+}
+
 // TestCleanupAfterCancelledAttempt — отменённая попытка убирает за собой под своим сроком.
 func TestCleanupAfterCancelledAttempt(t *testing.T) {
 	t.Parallel()

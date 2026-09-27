@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/textproto"
 	"net/url"
@@ -109,6 +110,12 @@ upload:
 	for i, m := range msgs {
 		for j, img := range m.Images {
 			var id string
+
+			if err = ctx.Err(); err != nil {
+				err = inPhase(llm.PhaseUpload, err)
+
+				break upload
+			}
 
 			id, err = p.upload(ctx, img, "image-"+strconv.Itoa(i)+"-"+strconv.Itoa(j))
 			if err != nil {
@@ -251,19 +258,21 @@ func (p *Provider) cleanup(ctx context.Context, ids []string, uncertain int) *ll
 }
 
 // unanswered — отказ загрузки, после которого файл мог остаться: запрос мог уйти, а отказа
-// до записи нет. Файл не создают только 4xx кроме 408, негодный запрос и отказ входа; 5xx и 408
-// шлюз отдаёт и после записи.
+// до записи нет. Файл не создают только 4xx кроме 408, негодный запрос, отказ входа и несостоявшееся
+// соединение; 5xx и 408 шлюз отдаёт и после записи.
 func unanswered(err error) bool {
 	var (
 		status  *llm.StatusError
 		request *llm.RequestError
 		phased  *llm.PhaseError
+		dial    *net.OpError
 	)
 
 	switch {
 	case errors.As(err, &phased) && phased.Phase == llm.PhaseAuth,
 		errors.As(err, &status) && status.Phase == llm.PhaseAuth,
-		errors.As(err, &request):
+		errors.As(err, &request),
+		errors.As(err, &dial) && dial.Op == "dial":
 		return false
 	case status != nil:
 		return status.Status >= http.StatusInternalServerError || status.Status == http.StatusRequestTimeout
