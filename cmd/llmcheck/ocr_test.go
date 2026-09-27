@@ -178,6 +178,8 @@ func TestOCRRefusesBeforeCalls(t *testing.T) {
 			"пишут текст в один page.txt"},
 		"регистр": {map[string][]byte{"a.PNG": []byte(pngFrame), "a.png": []byte(pngFrame)}, 5, "scan",
 			"a.PNG и a.png пишут текст в один a.txt"},
+		"регистр основы": {map[string][]byte{"Scan.png": []byte(pngFrame), "scan.jpg": []byte(jpegFrame)}, 5, "scan",
+			"пишут текст в один"},
 		"задачи не выбрать": {map[string][]byte{"a.png": []byte(pngFrame)}, 5, "", "в разделе ocr задач 2, нужна одна"},
 		"задача речи":       {map[string][]byte{"a.png": []byte(pngFrame)}, 5, "dictation", `"dictation" не объявлена`},
 	}

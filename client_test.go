@@ -303,6 +303,54 @@ func TestChatStopsOnCanceledContext(t *testing.T) {
 	}
 }
 
+// TestPauseCancelKeepsLastFailure — отмена в паузе между попытками не прячет последний отказ: у чата,
+// речи и OCR цепочка несёт и срок, и 503.
+func TestPauseCancelKeepsLastFailure(t *testing.T) {
+	t.Parallel()
+
+	busy := &llm.StatusError{Status: http.StatusServiceUnavailable}
+
+	for name, call := range map[string]func(context.Context) error{
+		"чат": func(ctx context.Context) error {
+			c := client(&fake{steps: []step{{err: busy}}}, nil)
+			c.Attempts, c.Pause = 2, time.Hour
+			_, err := c.Chat(ctx, req())
+
+			return err
+		},
+		"речь": func(ctx context.Context) error {
+			cfg := llm.SpeechTaskConfig{Provider: "asr", Model: "m", Attempts: 2}
+
+			route, _, err := speechRouter(&speaker{steps: []error{busy}}, cfg, nil).ResolveSpeech("dictation")
+			if err == nil {
+				_, err = route.Transcribe(ctx, halfSecond())
+			}
+
+			return err
+		},
+		"ocr": func(ctx context.Context) error {
+			cfg := llm.OCRTaskConfig{Provider: "vision", Model: "page", Languages: []string{"ru"}, Attempts: 2}
+
+			route, _, err := ocrRouter(&reader{steps: []error{busy}}, cfg, nil).ResolveOCR("frame")
+			if err == nil {
+				_, err = route.Recognize(ctx, frame())
+			}
+
+			return err
+		},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		err := call(ctx)
+
+		cancel()
+
+		var status *llm.StatusError
+		if !errors.Is(err, context.DeadlineExceeded) || !errors.As(err, &status) || status.Status != busy.Status {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
 // TestChatFailureCarriesLatency — отказ несёт потраченное время сам.
 func TestChatFailureCarriesLatency(t *testing.T) {
 	t.Parallel()
@@ -381,7 +429,8 @@ func TestFingerprint(t *testing.T) {
 	}
 }
 
-// TestChatOversizedBodyIsNever — ответ сверх предела тела не повторяется: на том же входе он придёт снова.
+// TestChatOversizedBodyIsNever — ответ генерации сверх предела тела не повторяется: на том же входе он
+// придёт снова. Вход и загрузка кадров повторяются как обычно.
 func TestChatOversizedBodyIsNever(t *testing.T) {
 	t.Parallel()
 
@@ -393,6 +442,15 @@ func TestChatOversizedBodyIsNever(t *testing.T) {
 
 	if call := callError(t, err); call.Class != llm.RetryNever || f.calls != 1 {
 		t.Errorf("класс %s, вызовов %d", call.Class, f.calls)
+	}
+
+	for _, phase := range []llm.Phase{llm.PhaseAuth, llm.PhaseUpload} {
+		f = &fake{steps: []step{{err: &llm.PhaseError{Phase: phase, Err: &httpjson.TooLargeError{Limit: 1}}}}}
+
+		_, err = client(f, nil).Chat(context.Background(), req())
+		if call := callError(t, err); call.Class != llm.RetryImmediate {
+			t.Errorf("%s: класс %s, ждали immediate: тело шлюза от входа не зависит", phase, call.Class)
+		}
 	}
 }
 
@@ -440,6 +498,8 @@ func TestChatRejectsBadRequestBeforeProvider(t *testing.T) {
 		{Model: "m", Output: llm.Output{Mode: llm.ModeJSON, Strict: true}},
 		{Model: "m", Output: llm.Output{Mode: llm.ModeText, Name: "answer"}},
 		{Model: "m", Options: llm.Options{Temperature: llm.Ptr(-0.1)}},
+		{Model: "m", Options: llm.Options{Temperature: llm.Ptr(math.NaN())}},
+		{Model: "m", Options: llm.Options{Temperature: llm.Ptr(math.Inf(1))}},
 		{Model: "m", Options: llm.Options{MaxOutputTokens: -1}},
 		{Model: "m", Options: llm.Options{Reasoning: "max"}},
 	} {

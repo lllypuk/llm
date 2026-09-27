@@ -512,7 +512,7 @@ func (r *runner) transcribe(ctx context.Context, route llm.SpeechRoute, plans []
 		moneyLine(cost))
 
 	if err != nil {
-		res.fail(failNote(err))
+		res.failOn(err, failNote(err))
 
 		return res
 	}

@@ -73,6 +73,8 @@ type result struct {
 	notes   []string
 	call    *callFacts
 	line    string
+	// cut — отказ оборван сроком или отменой: прогон неполный, если закрыт и его контекст.
+	cut bool
 }
 
 // callFacts — обезличенное о вызове: без текста запроса, токенов и идентификаторов поставщика.
@@ -201,7 +203,7 @@ func (r *runner) guard(ctx context.Context, check, subject string, fn func() res
 	case slices.ContainsFunc(res.notes, isCapNote):
 		r.incomplete = true
 		res.status = statusSkip
-	case ctx.Err() != nil:
+	case res.cut && ctx.Err() != nil:
 		r.incomplete = true
 		res.status = statusSkip
 		res.notes = append(res.notes, "срок прогона истёк")
@@ -404,8 +406,7 @@ func (r *runner) checkFinish(ctx context.Context, task string) result {
 		out.expect(usage.Known && usage.OutputTokens() > 0, "у обрезанного ответа расход неизвестен")
 		out.expect(!slices.ContainsFunc(call.Attempts[:last], truncated), "обрезанный ответ повторён")
 	case err != nil:
-		out.status = statusFail
-		out.notes = append(out.notes, "ждали truncated: "+failNote(err))
+		out.failOn(err, "ждали truncated: "+failNote(err))
 	default:
 		out.status = statusFail
 		out.notes = append(out.notes, fmt.Sprintf("ответ в %d токен не обрезан", finishTokens))
@@ -479,7 +480,7 @@ func (r *runner) checkOAuth(ctx context.Context, name string) result {
 
 	expiresAt, err := r.fetchExpiry(ctx, r.oauth[name])
 	if err != nil {
-		out.fail(err.Error())
+		out.failOn(err, err.Error())
 
 		return out
 	}
@@ -548,7 +549,7 @@ func (r *runner) verdict(check, task string, res llm.Result, err error) result {
 	out.check, out.subject, out.status = check, task, statusPass
 
 	if err != nil {
-		out.fail(failNote(err))
+		out.failOn(err, failNote(err))
 
 		return out
 	}
@@ -610,6 +611,12 @@ func (r *runner) facts(task string, res llm.Result, err error) result {
 func (res *result) fail(note string) {
 	res.status = statusFail
 	res.notes = append(res.notes, note)
+}
+
+// failOn — отказ по ошибке err; обрыв контекстом помечается, чтобы guard отличил его от нарушения.
+func (res *result) failOn(err error, note string) {
+	res.fail(note)
+	res.cut = res.cut || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func (res *result) expect(ok bool, note string) {

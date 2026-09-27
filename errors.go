@@ -246,9 +246,10 @@ func classify(provider, model string, err error) *CallError {
 		return fail
 	}
 
-	// Тело сверх предела на том же входе придёт снова, а попытка уже оплачена.
+	// Ответ генерации сверх предела на том же входе придёт снова, а попытка уже оплачена. Вход и загрузка
+	// кадров от входа не зависят: там такое тело — страница шлюза, и повтор законен.
 	var tooLarge *httpjson.TooLargeError
-	if errors.As(err, &tooLarge) {
+	if errors.As(err, &tooLarge) && fail.Phase == PhaseInference {
 		fail.Class = RetryNever
 
 		return fail

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"maps"
 	"net/http"
@@ -461,5 +462,36 @@ func TestDeadlineMidCallIsIncomplete(t *testing.T) {
 	var stdout bytes.Buffer
 	if code := run(context.Background(), o, &stdout, io.Discard, noEnv); code != exitIncomplete {
 		t.Errorf("выход %d\n%s", code, stdout.String())
+	}
+}
+
+// TestGuardKeepsViolationAfterDeadline — нарушение не из-за срока остаётся нарушением, даже если срок
+// истёк, пока проверка убирала за собой; оборванный контекстом вызов — пропуск.
+func TestGuardKeepsViolationAfterDeadline(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		err  error
+		want status
+	}{
+		"нарушение":     {errors.New("ответ не тот"), statusFail},
+		"обрыв сроком":  {context.DeadlineExceeded, statusSkip},
+		"обрыв отменой": {fmt.Errorf("вызов: %w", context.Canceled), statusSkip},
+	} {
+		ctx, cancel := context.WithCancel(context.Background())
+		r := &runner{}
+
+		res := r.guard(ctx, checkModel, "ask", func() result {
+			cancel()
+
+			out := result{status: statusPass}
+			out.failOn(tc.err, "отказ")
+
+			return out
+		})
+
+		if res.status != tc.want || r.incomplete != (tc.want == statusSkip) {
+			t.Errorf("%s: статус %s, неполный %t", name, res.status, r.incomplete)
+		}
 	}
 }
