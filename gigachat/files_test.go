@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strconv"
 	"strings"
@@ -222,6 +223,65 @@ func TestUnansweredUploadIsUncertain(t *testing.T) {
 
 	if _, deleted := f.state(); !reflect.DeepEqual(deleted, []string{"f1"}) {
 		t.Errorf("удалены %v", deleted)
+	}
+}
+
+// TestCancelledBeforeUploadIsCertain — загрузка, не начатая из-за истёкшего срока, файла не оставляет.
+func TestCancelledBeforeUploadIsCertain(t *testing.T) {
+	t.Parallel()
+
+	f := &files{}
+	p := provider(t, &backend{api: f.serve(t)})
+	msgs := []llm.Message{{Role: llm.RoleUser, Images: []llm.Image{jpeg("a")}}}
+	send := func(context.Context, [][]string) (llm.Result, error) { return llm.Result{}, nil }
+
+	// Токен в кеше: иначе отменённый срок оборвал бы вход, а не загрузку.
+	if _, err := p.WithFiles(context.Background(), msgs, send); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := p.WithFiles(ctx, msgs, send)
+
+	var warned *llm.WarnedError
+	if !errors.Is(err, context.Canceled) || errors.As(err, &warned) {
+		t.Fatalf("отказ %v", err)
+	}
+
+	if uploads, _ := f.state(); uploads != 1 {
+		t.Errorf("загрузок %d, ждали одну до отмены", uploads)
+	}
+}
+
+// TestRefusedConnectionIsCertain — загрузка, не дошедшая до соединения, файла не оставляет.
+func TestRefusedConnectionIsCertain(t *testing.T) {
+	t.Parallel()
+
+	f := &files{}
+	srv := httptest.NewServer(&backend{api: f.serve(t)})
+
+	p, err := gigachat.New(config(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msgs := []llm.Message{{Role: llm.RoleUser, Images: []llm.Image{jpeg("a")}}}
+	send := func(context.Context, [][]string) (llm.Result, error) { return llm.Result{}, nil }
+
+	// Токен в кеше: закрытый сервер оборвёт загрузку, а не вход.
+	if _, err = p.WithFiles(context.Background(), msgs, send); err != nil {
+		t.Fatal(err)
+	}
+
+	srv.Close()
+
+	_, err = p.WithFiles(context.Background(), msgs, send)
+
+	var warned *llm.WarnedError
+	if err == nil || errors.As(err, &warned) {
+		t.Fatalf("отказ %v", err)
 	}
 }
 

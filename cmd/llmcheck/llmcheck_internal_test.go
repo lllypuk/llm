@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"maps"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -396,6 +398,100 @@ func TestAnswerMatchesRejectsNegatedColor(t *testing.T) {
 	for _, tc := range cases {
 		if got := answerMatches(tc.mode, tc.text, fieldColor, isRed, colorWords()...); got != tc.want {
 			t.Errorf("%s %s: %t", tc.mode, tc.text, got)
+		}
+	}
+}
+
+// flakyOllama — первый запрос отбит 503, остальные отвечает fakeOllama.
+func flakyOllama(t *testing.T) *httptest.Server {
+	t.Helper()
+
+	var calls int
+
+	inner := fakeOllama(t, &calls).Config.Handler
+
+	var failed atomic.Bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if failed.CompareAndSwap(false, true) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+
+			return
+		}
+
+		inner.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	return srv
+}
+
+// TestRetriedServerErrorIsNoViolation — 503 перед ответом законно повторён: ни model, ни finish не нарушены.
+func TestRetriedServerErrorIsNoViolation(t *testing.T) {
+	t.Parallel()
+
+	for _, check := range []string{checkModel, checkFinish} {
+		o := options{
+			config: writeConfig(t, flakyOllama(t).URL), tasks: []string{"ask"}, checks: []string{check},
+			maxRequests: defaultMaxRequests, maxCost: defaultMaxCost, timeout: time.Minute,
+		}
+
+		var stdout bytes.Buffer
+		if code := run(context.Background(), o, &stdout, io.Discard, noEnv); code != exitOK {
+			t.Errorf("%s: выход %d\n%s", check, code, stdout.String())
+		}
+	}
+}
+
+// TestDeadlineMidCallIsIncomplete — срок прогона, истёкший посреди вызова, — неполный прогон, а не нарушение.
+func TestDeadlineMidCallIsIncomplete(t *testing.T) {
+	t.Parallel()
+
+	// Тело дочитано: иначе сервер не заметит обрыв соединения и Close ждал бы обработчик вечно.
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+
+	o := options{
+		config: writeConfig(t, srv.URL), tasks: []string{"ask"}, checks: []string{checkModel},
+		maxRequests: defaultMaxRequests, maxCost: defaultMaxCost, timeout: 300 * time.Millisecond,
+	}
+
+	var stdout bytes.Buffer
+	if code := run(context.Background(), o, &stdout, io.Discard, noEnv); code != exitIncomplete {
+		t.Errorf("выход %d\n%s", code, stdout.String())
+	}
+}
+
+// TestGuardKeepsViolationAfterDeadline — нарушение не из-за срока остаётся нарушением, даже если срок
+// истёк, пока проверка убирала за собой; оборванный контекстом вызов — пропуск.
+func TestGuardKeepsViolationAfterDeadline(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		err  error
+		want status
+	}{
+		"нарушение":     {errors.New("ответ не тот"), statusFail},
+		"обрыв сроком":  {context.DeadlineExceeded, statusSkip},
+		"обрыв отменой": {fmt.Errorf("вызов: %w", context.Canceled), statusSkip},
+	} {
+		ctx, cancel := context.WithCancel(context.Background())
+		r := &runner{}
+
+		res := r.guard(ctx, checkModel, "ask", func() result {
+			cancel()
+
+			out := result{status: statusPass}
+			out.failOn(tc.err, "отказ")
+
+			return out
+		})
+
+		if res.status != tc.want || r.incomplete != (tc.want == statusSkip) {
+			t.Errorf("%s: статус %s, неполный %t", name, res.status, r.incomplete)
 		}
 	}
 }

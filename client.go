@@ -164,7 +164,7 @@ func (r *call) do(ctx context.Context) (Result, error) {
 		}
 
 		if waitErr := sleep(ctx, c.retryPause(attempt, fail.RetryAfter)); waitErr != nil {
-			fail.Err = fmt.Errorf("ожидание повтора: %w", waitErr)
+			fail.Err = fmt.Errorf("ожидание повтора: %w; последний отказ: %w", waitErr, fail.Err)
 
 			return Result{}, r.fail(fail)
 		}

@@ -227,11 +227,13 @@ func textClash(names []string) error {
 
 	for _, name := range names {
 		stem := strings.TrimSuffix(name, filepath.Ext(name))
-		if prev, ok := seen[stem]; ok {
+		// Без учёта регистра: на macOS и Windows Scan.txt и scan.txt — один файл.
+		key := strings.ToLower(stem)
+		if prev, ok := seen[key]; ok {
 			return fmt.Errorf("-dir: %s и %s пишут текст в один %s%s", prev, name, stem, textExt)
 		}
 
-		seen[stem] = name
+		seen[key] = name
 	}
 
 	return nil
@@ -510,7 +512,7 @@ func (r *runner) transcribe(ctx context.Context, route llm.SpeechRoute, plans []
 		moneyLine(cost))
 
 	if err != nil {
-		res.fail(failNote(err))
+		res.failOn(err, failNote(err))
 
 		return res
 	}

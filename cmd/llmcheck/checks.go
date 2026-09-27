@@ -73,6 +73,8 @@ type result struct {
 	notes   []string
 	call    *callFacts
 	line    string
+	// cut — отказ оборван сроком или отменой: прогон неполный, если закрыт и его контекст.
+	cut bool
 }
 
 // callFacts — обезличенное о вызове: без текста запроса, токенов и идентификаторов поставщика.
@@ -195,9 +197,16 @@ func (r *runner) guard(ctx context.Context, check, subject string, fn func() res
 	}
 
 	res := fn()
-	if res.status == statusFail && slices.ContainsFunc(res.notes, isCapNote) {
+
+	switch {
+	case res.status != statusFail:
+	case slices.ContainsFunc(res.notes, isCapNote):
 		r.incomplete = true
 		res.status = statusSkip
+	case res.cut && ctx.Err() != nil:
+		r.incomplete = true
+		res.status = statusSkip
+		res.notes = append(res.notes, "срок прогона истёк")
 	}
 
 	return res
@@ -389,23 +398,24 @@ func (r *runner) checkFinish(ctx context.Context, task string) result {
 
 	switch {
 	case errors.Is(err, llm.ErrTruncated) && errors.As(err, &call):
+		// Судим последнюю попытку: 5xx до обрезки законно повторён и делает сумму расхода неизвестной.
+		last := len(call.Attempts) - 1
+		usage := call.Attempts[last].Usage
 		out.status = statusPass
 		out.expect(call.Class == llm.RetryNever, fmt.Sprintf("класс обрезанного %s, ждали never", call.Class))
-		out.expect(out.call.usage.Known && out.call.usage.OutputTokens() > 0, "у обрезанного ответа расход неизвестен")
+		out.expect(usage.Known && usage.OutputTokens() > 0, "у обрезанного ответа расход неизвестен")
+		out.expect(!slices.ContainsFunc(call.Attempts[:last], truncated), "обрезанный ответ повторён")
 	case err != nil:
-		out.status = statusFail
-		out.notes = append(out.notes, "ждали truncated: "+failNote(err))
+		out.failOn(err, "ждали truncated: "+failNote(err))
 	default:
 		out.status = statusFail
 		out.notes = append(out.notes, fmt.Sprintf("ответ в %d токен не обрезан", finishTokens))
 	}
 
-	if out.call.attempts > 1 {
-		out.fail("обрезанный ответ повторён")
-	}
-
 	return out
 }
+
+func truncated(a llm.AttemptReport) bool { return a.Outcome == llm.OutcomeTruncated }
 
 // checkLimits — предельное число кадров профиля одним вызовом: загрузка принята, уборка прошла.
 func (r *runner) checkLimits(ctx context.Context, task string) result {
@@ -470,7 +480,7 @@ func (r *runner) checkOAuth(ctx context.Context, name string) result {
 
 	expiresAt, err := r.fetchExpiry(ctx, r.oauth[name])
 	if err != nil {
-		out.fail(err.Error())
+		out.failOn(err, err.Error())
 
 		return out
 	}
@@ -539,12 +549,12 @@ func (r *runner) verdict(check, task string, res llm.Result, err error) result {
 	out.check, out.subject, out.status = check, task, statusPass
 
 	if err != nil {
-		out.fail(failNote(err))
+		out.failOn(err, failNote(err))
 
 		return out
 	}
 
-	u := out.call.usage
+	u := res.Usage
 	out.expect(u.Known, "расход сообщён не полностью")
 	out.expect(u.InputTokens() > 0 && u.OutputTokens() > 0, "нулевой расход у удавшейся генерации")
 	out.expect(res.Finish.Kind == llm.FinishStop, fmt.Sprintf("finish_reason %q, ждали stop", res.Finish.Raw))
@@ -601,6 +611,12 @@ func (r *runner) facts(task string, res llm.Result, err error) result {
 func (res *result) fail(note string) {
 	res.status = statusFail
 	res.notes = append(res.notes, note)
+}
+
+// failOn — отказ по ошибке err; обрыв контекстом помечается, чтобы guard отличил его от нарушения.
+func (res *result) failOn(err error, note string) {
+	res.fail(note)
+	res.cut = res.cut || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func (res *result) expect(ok bool, note string) {

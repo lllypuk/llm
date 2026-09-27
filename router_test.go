@@ -3,6 +3,7 @@ package llm_test
 import (
 	"context"
 	"errors"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -478,6 +479,13 @@ func TestDescriptorFingerprint(t *testing.T) {
 		if d.Fingerprint("prompt") == base.Fingerprint("prompt") {
 			t.Errorf("%s не изменил отпечаток", name)
 		}
+	}
+
+	zero, negZero := route.Descriptor(), route.Descriptor()
+	zero.Options.Temperature, negZero.Options.Temperature = llm.Ptr(0.0), llm.Ptr(math.Copysign(0, -1))
+
+	if zero.Fingerprint("prompt") != negZero.Fingerprint("prompt") {
+		t.Error("-0 и 0 дали разные отпечатки")
 	}
 
 	if base.Fingerprint("prompt") == base.Fingerprint("prompt2") {

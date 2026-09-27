@@ -205,11 +205,15 @@ func TestSpeechRejectedBeforeNetwork(t *testing.T) {
 
 	boom := errors.New("метаданные недоступны")
 
+	wide := sttRequest(make([]byte, 96000*20))
+	wide.SampleRate = 48000
+
 	cases := map[string]struct {
 		creds yandex.CredentialSource
 		req   llm.SpeechRequest
 	}{
 		"длиннее 30 с":  {yandex.APIKey("k"), sttRequest(pcm(30.5))},
+		"больше 1 МиБ":  {yandex.APIKey("k"), wide},
 		"без модели":    {yandex.APIKey("k"), llm.SpeechRequest{SampleRate: 16000, PCM: pcm(1)}},
 		"пустая запись": {yandex.APIKey("k"), sttRequest(nil)},
 		"отказ IAM": {

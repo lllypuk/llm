@@ -22,6 +22,8 @@ const SpeechName = "speechkit"
 const (
 	// speechMaxAudio — предел синхронного `stt:recognize` у любой модели; 1 МБ при 16 кГц он не превышает.
 	speechMaxAudio = 30 * time.Second
+	// speechMaxBytes — предел тела того же метода: выше 16 кГц он наступает раньше срока.
+	speechMaxBytes = 1 << 20
 	maxSpeechBody  = 64 << 10
 )
 
@@ -83,6 +85,12 @@ func (s *Speech) SpeechCapabilities(model string) (llm.SpeechCapabilities, bool)
 func (s *Speech) Transcribe(ctx context.Context, req llm.SpeechRequest) (llm.Transcript, error) {
 	if err := req.Validate(speechMaxAudio); err != nil {
 		return llm.Transcript{}, err
+	}
+
+	if len(req.PCM) > speechMaxBytes {
+		return llm.Transcript{}, &llm.RequestError{
+			Message: fmt.Sprintf("запись %d байт сверх предела %d", len(req.PCM), speechMaxBytes),
+		}
 	}
 
 	scheme, value, err := s.creds.Token(ctx)

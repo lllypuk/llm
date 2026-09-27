@@ -254,7 +254,7 @@ func (r *runner) recognize(ctx context.Context, route llm.OCRRoute, plans []pric
 		latency.Round(time.Millisecond), pages, len(attempts), moneyLine(cost))
 
 	if err != nil {
-		res.fail(failNote(err))
+		res.failOn(err, failNote(err))
 
 		return res
 	}

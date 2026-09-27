@@ -205,7 +205,7 @@ func (r SpeechRoute) do(ctx context.Context, run *call, req SpeechRequest) (Spee
 		}
 
 		if waitErr := sleep(ctx, c.retryPause(attempt, fail.RetryAfter)); waitErr != nil {
-			fail.Err = fmt.Errorf("ожидание повтора: %w", waitErr)
+			fail.Err = fmt.Errorf("ожидание повтора: %w; последний отказ: %w", waitErr, fail.Err)
 
 			return SpeechResult{}, run.fail(fail)
 		}
@@ -239,8 +239,15 @@ func speechMetaOf(tr Transcript, req SpeechRequest, err error) attemptMeta {
 		return meta
 	}
 
+	var response *ResponseError
+
 	var status *StatusError
-	if errors.As(err, &status) {
+
+	switch {
+	case errors.As(err, &response):
+		meta.model = response.Model
+		meta.requestID = response.RequestID
+	case errors.As(err, &status):
 		meta.requestID = status.RequestID
 	}
 

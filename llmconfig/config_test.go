@@ -278,7 +278,7 @@ func TestValidateCollects(t *testing.T) {
 	    "local": {"kind": "ollama", "endpoint": "http://o", "scope": "x", "auth": {"api_key": "${K}"}},
 	    "giga": {"kind": "gigachat", "endpoint": "https://g"},
 	    "ya": {"kind": "yandex", "endpoint": "", "folder": "f", "auth": {"api_key": "$K"}},
-	    "odd": {"kind": "openai", "endpoint": "https://o"},
+	    "odd": {"kind": "openai", "endpoint": "ftp://o"},
 	    "leak": {"kind": "ollama", "endpoint": "http://user:hunter2@o"},
 	    "query": {"kind": "ollama", "endpoint": "http://o/?key=hunter2"},
 	    "bare": {"kind": "ollama", "endpoint": "ollama:11434"}
@@ -314,6 +314,7 @@ func TestValidateCollects(t *testing.T) {
 		"providers.ya.endpoint: адрес не задан",
 		"providers.ya.auth.api_key: секрет задаётся ссылкой",
 		`providers.odd.kind: неизвестный вид плеча "openai"`,
+		"providers.odd.endpoint: схема не http и не https",
 		"providers.leak.endpoint: учётные данные в адресе запрещены",
 		"providers.query.endpoint: query и фрагмент в адресе запрещены",
 		"providers.bare.endpoint: схема не http и не https",

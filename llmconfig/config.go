@@ -401,7 +401,9 @@ func (p Provider) validate(path string) []error {
 	case KindYandex, KindSpeechKit, KindVisionOCR:
 		required = []string{"folder", yandexAuthField}
 	default:
-		return append(errs, fmt.Errorf("%s.kind: неизвестный вид плеча %q", path, p.Kind))
+		// Сверка полей с видом без вида бессмысленна, но адрес и секреты проверяются: все ошибки разом.
+		errs = append(errs, fmt.Errorf("%s.kind: неизвестный вид плеча %q", path, p.Kind))
+		fields = nil
 	}
 
 	if p.Endpoint == "" {
