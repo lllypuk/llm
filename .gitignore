@@ -1,1 +1,7 @@
 coverage.out
+
+/.revmux/*
+!/.revmux/profile.md
+.delta/
+.codex/
+.agents/
