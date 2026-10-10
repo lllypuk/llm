@@ -118,9 +118,9 @@ v0.3.0. Заводится раздел `Ломает:` у версий, зад�
 
 ### Task 5: Verify acceptance criteria
 
-- [ ] `switch` по `Kind` вне `llmconfig` и `llmbuild` не осталось (`grep -rn 'switch p.Kind' --include='*.go' . | grep -v '^./llm\(config\|build\)/'` — вывод пустой)
-- [ ] `go vet ./... && go test -race ./...`, `go test -race -tags live ./cmd/llmcheck`
-- [ ] `golangci-lint run --build-tags=live` — 0 замечаний; зависимостей вне stdlib нет
+- [x] `switch` по `Kind` вне `llmconfig` и `llmbuild` не осталось (`grep -rn 'switch p.Kind' --include='*.go' . | grep -v '^./llm\(config\|build\)/'` — вывод пустой)
+- [x] `go vet ./... && go test -race ./...`, `go test -race -tags live ./cmd/llmcheck`
+- [x] `golangci-lint run --build-tags=live` — 0 замечаний; зависимостей вне stdlib нет
 
 ### Task 6: [Final] Документы v0.7.0
 
