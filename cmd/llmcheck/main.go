@@ -25,10 +25,8 @@ import (
 	"time"
 
 	"github.com/lllypuk/llm"
-	"github.com/lllypuk/llm/gigachat"
+	"github.com/lllypuk/llm/llmbuild"
 	"github.com/lllypuk/llm/llmconfig"
-	"github.com/lllypuk/llm/ollama"
-	"github.com/lllypuk/llm/yandex"
 )
 
 // Коды выхода: нарушение контракта отличается от прогона, остановленного потолком.
@@ -256,7 +254,7 @@ func prepare(data []byte, o options, lookup llmconfig.Lookup) (*runner, error) {
 	}
 
 	for _, name := range cfg.Active() {
-		p, target, buildErr := build(cfg.Providers[name])
+		p, target, buildErr := build(name, cfg.Providers[name])
 		if buildErr != nil {
 			return nil, fmt.Errorf("providers.%s: %w", name, buildErr)
 		}
@@ -283,50 +281,34 @@ type oauthTarget struct {
 	http     *http.Client
 }
 
-// build собирает плечо по виду; у GigaChat — ещё и цель проверки OAuth тем же транспортом.
-func build(p llmconfig.Provider) (llm.Provider, *oauthTarget, error) {
+// build собирает чатовое плечо; у GigaChat — ещё и цель проверки OAuth на корнях ca_file.
+func build(name string, p llmconfig.Provider) (llm.Provider, *oauthTarget, error) {
+	b, err := llmbuild.Arm(name, p, llmbuild.Options{})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if b.Provider == nil {
+		return nil, nil, fmt.Errorf("неизвестный вид плеча %q", p.Kind)
+	}
+
+	if p.Kind != llmconfig.KindGigaChat {
+		return b.Provider, nil, nil
+	}
+
 	pool, err := loadCA(p.CAFile)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	client := trusting(pool)
-
-	switch p.Kind {
-	case llmconfig.KindOllama:
-		prov := ollama.New(p.Endpoint)
-		prov.HTTP = client
-
-		return prov, nil, nil
-	case llmconfig.KindGigaChat:
-		prov, buildErr := gigachat.New(gigachat.Config{
-			OAuthEndpoint:    p.OAuthEndpoint,
-			APIEndpoint:      p.Endpoint,
-			AuthorizationKey: p.Auth.AuthorizationKey.Value(),
-			Scope:            p.Scope,
-			CA:               pool,
-			HTTP:             client,
-		})
-		target := &oauthTarget{
-			endpoint: p.OAuthEndpoint,
-			key:      p.Auth.AuthorizationKey.Value(),
-			scope:    p.Scope,
-			http:     client,
-		}
-
-		return prov, target, buildErr
-	case llmconfig.KindYandex:
-		prov, buildErr := yandex.New(yandex.Config{
-			Endpoint:    p.Endpoint,
-			Folder:      p.Folder,
-			Credentials: yandex.APIKey(p.Auth.APIKey.Value()),
-			HTTP:        client,
-		})
-
-		return prov, nil, buildErr
-	default:
-		return nil, nil, fmt.Errorf("неизвестный вид плеча %q", p.Kind)
+	target := &oauthTarget{
+		endpoint: p.OAuthEndpoint,
+		key:      p.Auth.AuthorizationKey.Value(),
+		scope:    p.Scope,
+		http:     trusting(pool),
 	}
+
+	return b.Provider, target, nil
 }
 
 // loadCA — корни из PEM-файла целиком, без системных; пустой путь — корни системы.

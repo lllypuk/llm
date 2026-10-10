@@ -4,14 +4,14 @@ package sberauth
 
 import (
 	"context"
-	"crypto/tls"
 	"crypto/x509"
-	"errors"
+	"fmt"
 	"io"
 	"net/http"
 
 	"github.com/lllypuk/llm"
 	"github.com/lllypuk/llm/internal/httpjson"
+	"github.com/lllypuk/llm/internal/trust"
 )
 
 // Config — адрес OAuth, ключ, scope и доверенные корни одного плеча.
@@ -37,9 +37,9 @@ type Source struct {
 
 // New собирает источник без сети.
 func New(cfg Config) (*Source, error) {
-	client, err := trusting(cfg.Name, cfg.HTTP, cfg.CA)
+	client, err := trust.Client(cfg.HTTP, cfg.CA)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s: %w", cfg.Name, err)
 	}
 
 	o := &oauth{endpoint: cfg.Endpoint, key: cfg.Key, scope: cfg.Scope, http: client}
@@ -99,38 +99,4 @@ func (s *Source) Do(
 
 		s.tokens.Invalidate(tok)
 	}
-}
-
-// trusting — клиент с корнями CA на клоне транспорта; проверка TLS включается, даже если основа её выключила.
-func trusting(name string, base *http.Client, ca *x509.CertPool) (*http.Client, error) {
-	if base == nil {
-		base = http.DefaultClient
-	}
-
-	if ca == nil {
-		return base, nil
-	}
-
-	rt := base.Transport
-	if rt == nil {
-		rt = http.DefaultTransport
-	}
-
-	tr, ok := rt.(*http.Transport)
-	if !ok {
-		return nil, errors.New(name + ": CA задан, а транспорт не *http.Transport")
-	}
-
-	tr = tr.Clone()
-	if tr.TLSClientConfig == nil {
-		tr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
-	}
-
-	tr.TLSClientConfig.RootCAs = ca
-	tr.TLSClientConfig.InsecureSkipVerify = false
-
-	client := *base
-	client.Transport = tr
-
-	return &client, nil
 }

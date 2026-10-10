@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"github.com/lllypuk/llm"
+	"github.com/lllypuk/llm/llmbuild"
 	"github.com/lllypuk/llm/llmconfig"
 	"github.com/lllypuk/llm/pricing"
-	"github.com/lllypuk/llm/yandex"
 )
 
 const cmdOCR = "ocr"
@@ -165,27 +165,17 @@ func prepareOCR(data []byte, o dirOptions, lookup llmconfig.Lookup) (*runner, ll
 	return r, route, nil
 }
 
-func buildOCR(p llmconfig.Provider) (llm.Recognizer, error) {
-	if p.Kind != llmconfig.KindVisionOCR {
+func buildOCR(name string, p llmconfig.Provider) (llm.Recognizer, error) {
+	b, err := llmbuild.Arm(name, p, llmbuild.Options{})
+	if err != nil {
+		return nil, err
+	}
+
+	if b.OCR == nil {
 		return nil, fmt.Errorf("вид плеча %q не распознаёт текст", p.Kind)
 	}
 
-	pool, err := loadCA(p.CAFile)
-	if err != nil {
-		return nil, err
-	}
-
-	rec, err := yandex.NewOCR(yandex.OCRConfig{
-		Endpoint:    p.Endpoint,
-		Folder:      p.Folder,
-		Credentials: yandex.APIKey(p.Auth.APIKey.Value()),
-		HTTP:        trusting(pool),
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return rec, nil
+	return b.OCR, nil
 }
 
 // countedOCR — плечо OCR за счётчиком: каждая попытка берёт обращение до сети.
