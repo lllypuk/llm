@@ -19,10 +19,9 @@ import (
 	"time"
 
 	"github.com/lllypuk/llm"
+	"github.com/lllypuk/llm/llmbuild"
 	"github.com/lllypuk/llm/llmconfig"
 	"github.com/lllypuk/llm/pricing"
-	"github.com/lllypuk/llm/salutespeech"
-	"github.com/lllypuk/llm/yandex"
 )
 
 const (
@@ -347,9 +346,11 @@ func dirRunner(cfg *llmconfig.Config, task string, o dirOptions, router *llm.Rou
 }
 
 // buildActive собирает плечи, на которые ссылаются задачи конфига, и отдаёт каждое в put.
-func buildActive[T any](cfg *llmconfig.Config, build func(llmconfig.Provider) (T, error), put func(string, T)) error {
+func buildActive[T any](
+	cfg *llmconfig.Config, build func(string, llmconfig.Provider) (T, error), put func(string, T),
+) error {
 	for _, name := range cfg.Active() {
-		p, err := build(cfg.Providers[name])
+		p, err := build(name, cfg.Providers[name])
 		if err != nil {
 			return fmt.Errorf("providers.%s: %w", name, err)
 		}
@@ -405,44 +406,17 @@ func pickTask[T any](section, noun, task string, declared map[string]T) (string,
 	return task, nil
 }
 
-func buildSpeech(p llmconfig.Provider) (llm.Transcriber, error) {
-	pool, err := loadCA(p.CAFile)
+func buildSpeech(name string, p llmconfig.Provider) (llm.Transcriber, error) {
+	b, err := llmbuild.Arm(name, p, llmbuild.Options{})
 	if err != nil {
 		return nil, err
 	}
 
-	client := trusting(pool)
-
-	switch p.Kind {
-	case llmconfig.KindSpeechKit:
-		s, buildErr := yandex.NewSpeech(yandex.SpeechConfig{
-			Endpoint:    p.Endpoint,
-			Folder:      p.Folder,
-			Credentials: yandex.APIKey(p.Auth.APIKey.Value()),
-			HTTP:        client,
-		})
-		if buildErr != nil {
-			return nil, buildErr
-		}
-
-		return s, nil
-	case llmconfig.KindSaluteSpeech:
-		s, buildErr := salutespeech.New(salutespeech.Config{
-			OAuthEndpoint:    p.OAuthEndpoint,
-			APIEndpoint:      p.Endpoint,
-			AuthorizationKey: p.Auth.AuthorizationKey.Value(),
-			Scope:            p.Scope,
-			CA:               pool,
-			HTTP:             client,
-		})
-		if buildErr != nil {
-			return nil, buildErr
-		}
-
-		return s, nil
-	default:
+	if b.Speech == nil {
 		return nil, fmt.Errorf("вид плеча %q не распознаёт речь", p.Kind)
 	}
+
+	return b.Speech, nil
 }
 
 // countedSpeech — плечо речи за счётчиком: каждая попытка берёт обращение до сети.

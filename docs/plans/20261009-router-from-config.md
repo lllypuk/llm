@@ -99,11 +99,11 @@ v0.3.0. Заводится раздел `Ломает:` у версий, зад�
 
 **Files:** `cmd/llmcheck/main.go`, `cmd/llmcheck/speech.go`, `cmd/llmcheck/ocr.go`
 
-- [ ] `build`, `buildSpeech`, `buildOCR` заменить вызовом `llmbuild.Arm` с проверкой нужного поля
+- [x] `build`, `buildSpeech`, `buildOCR` заменить вызовом `llmbuild.Arm` с проверкой нужного поля
   `Built` (прежние тексты «вид плеча %q не распознаёт речь/текст» сохранить); `oauthTarget` собирать из `llmconfig.Provider`
   с тем же клиентом на корнях `CAFile`, что сейчас (`main.go:310`): без них отдельная проверка OAuth
   упрётся в сертификат Сбера — `loadCA` и `trusting` остаются для неё
-- [ ] `go test -race -tags live ./cmd/llmcheck` и `go test -race ./...` — зелёные
+- [x] `go test -race -tags live ./cmd/llmcheck` и `go test -race ./...` — зелёные
 
 ### Task 4: раздел «Ломает:» задним числом
 
