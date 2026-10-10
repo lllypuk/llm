@@ -37,7 +37,7 @@ const allKinds = `{
   },
   "tasks": {
     "ask": {"provider": "local", "model": "gemma"},
-    "chat": {"provider": "giga", "model": "GigaChat"},
+    "chat": {"provider": "giga", "model": "GigaChat-2"},
     "draft": {"provider": "yc", "model": "yandexgpt"}
   },
   "speech": {
