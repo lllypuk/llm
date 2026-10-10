@@ -109,12 +109,12 @@ v0.3.0. Заводится раздел `Ломает:` у версий, зад�
 
 **Files:** `CHANGELOG.md`
 
-- [ ] сравнить экспортируемый API соседних тегов (`git worktree add` на тег, `go doc -all` по
+- [x] сравнить экспортируемый API соседних тегов (`git worktree add` на тег, `go doc -all` по
   пакетам, diff): v0.1.0→v0.2.0 … v0.6.0→v0.6.1
-- [ ] у затронутых версий — подраздел `Ломает:`; в v0.3.0 обязательно `Request.Temperature` →
+- [x] у затронутых версий — подраздел `Ломает:`; в v0.3.0 обязательно `Request.Temperature` →
   `Request.Options.Temperature` и `Usage.InputTokens` поле → метод (части `Usage` непересекающиеся);
   в v0.4.0 — обязательный `Provider.AttemptOverhead` для своих плеч
-- [ ] `go test -race ./...` — зелёный (CHANGELOG тестами не читается — проверка, что ничего не задето)
+- [x] `go test -race ./...` — зелёный (CHANGELOG тестами не читается — проверка, что ничего не задето)
 
 ### Task 5: Verify acceptance criteria
 

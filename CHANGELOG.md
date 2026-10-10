@@ -67,6 +67,10 @@
 
 Маршруты задач: смена плеча — правка файла и рестарт, без запасного плеча.
 
+Ломает:
+
+- `Provider.AttemptOverhead` — новый обязательный метод: своё плечо потребителя без него не собирается.
+
 - `Router`, `Route`, `Descriptor`: задача разрешается в неизменяемый маршрут; `Validate` сверяет задачи
   потребителя с профилями плеч до вызова (`nil` — без требований, пустая карта — задач не нужно).
 - `Provider.AttemptOverhead` — обязательный метод контракта: `Route.Budget` включает уборку плеча
@@ -87,6 +91,16 @@
 Платные плечи: без нормализованного расхода, причины конца генерации и отчётов попыток
 вызов нельзя ни повторять, ни оплачивать.
 
+Ломает:
+
+- `Request.Temperature` → `Request.Options.Temperature`.
+- `Usage.InputTokens`, `Usage.OutputTokens`: поля → методы; поля теперь — непересекающиеся части
+  `BillableInput`, `CachedInput`, `Output`, `Reasoning`.
+- `Result.FinishReason` → `Result.Finish` (`Finish.Raw`, `Finish.Kind`).
+- `CallError.Attempts`: `int` → `[]AttemptReport`.
+- `Provider.Capabilities` — новый обязательный метод.
+- `Result`, `Usage`, `CallError`, `CallReport`, `AttemptReport`, `ResponseError` больше не сравниваются `==`.
+
 - `gigachat`: OAuth со слиянием обновлений и одним повтором на 401, транспорт с CA Минцифры,
   кадры через `/files` с уборкой после попытки (`CleanupWarning`), `chat/completions` со схемой,
   профиль моделей второго поколения.
@@ -103,3 +117,7 @@
 ## v0.2.0
 
 Контракт, клиент с повторами и классами отказа, наблюдатель, плечо `ollama`. v0.1.0 не использовать.
+
+Ломает:
+
+- `Result.Attempts` → `Result.Report.Attempts`.
