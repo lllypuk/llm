@@ -81,10 +81,10 @@ v0.3.0. Заводится раздел `Ломает:` у версий, зад�
 
 **Files:** `llmbuild/llmbuild.go`, `llmbuild/llmbuild_test.go`
 
-- [ ] `Options`, `Built`, `Arm` по Решениям 3–4; корни из `o.PEM[name]` или `CAFile`; `trusting` — в общий `internal/`
-- [ ] тесты: шесть видов дают своё поле `Built`; неизвестный вид; битый PEM и пустой файл корней;
+- [x] `Options`, `Built`, `Arm` по Решениям 3–4; корни из `o.PEM[name]` или `CAFile`; `trusting` — в общий `internal/`
+- [x] тесты: шесть видов дают своё поле `Built`; неизвестный вид; битый PEM и пустой файл корней;
   с корнями у не-Сбера клиент несёт `RootCAs` из PEM, прочие TLS-настройки основы сохраняются; без корней — основа `HTTP` как есть
-- [ ] `go test -race ./llmbuild/` — зелёный
+- [x] `go test -race ./llmbuild/` — зелёный
 
 ### Task 2: `llmbuild.Router`
 
