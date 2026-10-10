@@ -17,12 +17,10 @@ v0.3.0. Заводится раздел `Ломает:` у версий, зад�
 
 ## Решения (приняты 2026-10-09, не переигрывать)
 
-1. **Развилка, ждёт утверждения пользователем**: `llmconfig` и `CLAUDE.md` прямо записывают «плечи по
+1. **Сборщик в библиотеке** (codex, волна утверждена пользователем): `llmconfig` и `CLAUDE.md` прямо записывают «плечи по
    конфигу собирает потребитель, не библиотека». Принципу `docs/go-libs.md` «механизм в библиотеке,
    политика в проекте» сборщик не противоречит, если транспорт — параметр: соответствие вида
-   конструктору — механизм, `http.Client`, корни и обёртки — политика. План написан под вариант
-   «сборщик с транспортом параметром»; при отказе — только Task 3 в усечённом виде (одна функция
-   сборки внутри `llmcheck`) и Task 4.
+   конструктору — механизм, `http.Client`, корни и обёртки — политика.
 2. **Отдельный подпакет `llmbuild`**, а не `llmconfig`: разбор конфига остаётся без адаптеров.
 3. **API**:
    - `Options{PEM map[string][]byte; HTTP func(name, kind string) *http.Client}`. `PEM` — корни по имени плеча; нет
@@ -30,14 +28,15 @@ v0.3.0. Заводится раздел `Ломает:` у версий, зад�
      конфига и кладёт его в отпечаток настройки (`routes.go:266`), поэтому байты, а не путь. `HTTP` —
      основа клиента по имени и виду плеча: имя нужно, чтобы потребитель дал разным плечам одного
      вида разный клиент; `nil` — `&http.Client{}`.
-   - `Arm(name string, p llmconfig.Provider, pem []byte, o Options) (Built, error)`, `Built{Provider; Speech;
+   - `Arm(name string, p llmconfig.Provider, o Options) (Built, error)` — корни из `o.PEM[name]`, `Built{Provider; Speech;
      OCR}` — ровно одно поле не `nil`; неизвестный вид — ошибка.
    - `Router(cfg llmconfig.Config, o Options) (*llm.Router, error)` — плечи `cfg.Active()`, задачи
      `Routes()`, `SpeechRoutes()`, `OCRRoutes()`; ошибки копятся `errors.Join` с префиксом
      `providers.<имя>:` в порядке имён, как у DPP.
 4. **Корни — целиком, без системных** (как в обоих копиях): плечам Сбера — `Config.CA`, остальным —
-   клон `http.DefaultTransport` основы с `RootCAs` и `MinVersion: TLS12`. Транспорт основы не
-   `*http.Transport` при заданных корнях — ошибка, а не молчаливая подмена.
+   тот же механизм: `internal/sberauth.trusting` выносится в общий `internal/` — клон транспорта основы
+   от `HTTP`, меняются только `RootCAs` и `InsecureSkipVerify=false`, прочий `TLSClientConfig` основы не
+   затирается. Транспорт основы не `*http.Transport` при заданных корнях — ошибка, а не молчаливая подмена.
 5. **`Ломает:`** — подраздел версии со списком «было → стало» по символам; нет ломающих — подраздела нет.
    Правило — строкой в `CLAUDE.md` (раздел «Процесс»).
 6. **Отменяется правило «плечи по конфигу собирает потребитель, не библиотека»** (`CLAUDE.md:37`,
@@ -51,7 +50,7 @@ v0.3.0. Заводится раздел `Ломает:` у версий, зад�
 - `cmd/llmcheck`: `build` (`main.go:286`, ещё отдаёт `oauthTarget` GigaChat — он собирается из
   конфига без адаптера и остаётся в `llmcheck`), `loadCA`, `trusting`; `buildSpeech`, `buildOCR`;
   обёртки `countedSpeech`, `countedOCR` надеваются после сборки.
-- DPP `internal/llm/routes.go:432-516` — `buildProvider` и `transport`: Сберу `&http.Client{}` +
+- DPP `internal/llm/routes.go:434-527` — `buildProvider` и `transport`: Сберу `&http.Client{}` +
   `CA`, остальным клон транспорта с корнями.
 - Образец среза с README и CHANGELOG — `docs/plans/completed/20260925-ocr-route.md`.
 
@@ -82,9 +81,9 @@ v0.3.0. Заводится раздел `Ломает:` у версий, зад�
 
 **Files:** `llmbuild/llmbuild.go`, `llmbuild/llmbuild_test.go`
 
-- [ ] `Options`, `Built`, `Arm` по Решениям 3–4; корни из `pem` или `CAFile`
+- [ ] `Options`, `Built`, `Arm` по Решениям 3–4; корни из `o.PEM[name]` или `CAFile`; `trusting` — в общий `internal/`
 - [ ] тесты: шесть видов дают своё поле `Built`; неизвестный вид; битый PEM и пустой файл корней;
-  с корнями у не-Сбера клиент несёт `RootCAs` из PEM и `MinVersion`; без корней — основа `HTTP` как есть
+  с корнями у не-Сбера клиент несёт `RootCAs` из PEM, прочие TLS-настройки основы сохраняются; без корней — основа `HTTP` как есть
 - [ ] `go test -race ./llmbuild/` — зелёный
 
 ### Task 2: `llmbuild.Router`
@@ -119,7 +118,7 @@ v0.3.0. Заводится раздел `Ломает:` у версий, зад�
 
 ### Task 5: Verify acceptance criteria
 
-- [ ] `switch` по `Kind` вне `llmconfig` и `llmbuild` не осталось (`grep -rn 'switch p.Kind' --include=*.go`)
+- [ ] `switch` по `Kind` вне `llmconfig` и `llmbuild` не осталось (`grep -rn 'switch p.Kind' --include='*.go' . | grep -v '^./llm\(config\|build\)/'` — вывод пустой)
 - [ ] `go vet ./... && go test -race ./...`, `go test -race -tags live ./cmd/llmcheck`
 - [ ] `golangci-lint run --build-tags=live` — 0 замечаний; зависимостей вне stdlib нет
 
@@ -128,8 +127,8 @@ v0.3.0. Заводится раздел `Ломает:` у версий, зад�
 **Files:** `README.md`, `CHANGELOG.md`, `CLAUDE.md`, `llmconfig/config.go`
 
 - [ ] `CHANGELOG.md`: `## v0.7.0` — `llmbuild`, `llmcheck` на нём; `Ломает:` нет
-- [ ] `README.md`: короткий раздел о `llmbuild` рядом с `llmconfig` — пример `Router(cfg, Options{})`,
-  что транспорт и обёртки остаются у потребителя
+- [ ] `README.md`: короткий раздел о `llmbuild` рядом с `llmconfig` — пример `Router(cfg, Options{})`;
+  `Router` принимает развёрнутый конфиг (`Load` или `Expand`); транспорт и обёртки остаются у потребителя
 - [ ] `CLAUDE.md`: строку «Плечи по конфигу собирает потребитель…» заменить текстом Решения 6; в «Процесс» — правило `Ломает:` одной
   строкой; в перечень «Новое плечо затрагивает» добавить `llmbuild`
 - [ ] док пакета `llmconfig` и `README.md:60`: правило «собирает потребитель» → текст Решения 6
