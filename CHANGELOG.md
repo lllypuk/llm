@@ -11,7 +11,7 @@
   основа клиента по имени и виду. Корни ложатся на клон её транспорта, прочий `TLSClientConfig` сохраняется;
   транспорт не `*http.Transport` при заданных корнях — ошибка.
 - `cmd/llmcheck` собирает плечи через `llmbuild`; проверка OAuth GigaChat — прежняя.
-- CHANGELOG: подраздел «Ломает:» у версий с несовместимой правкой API, у прошлых — задним числом.
+- CHANGELOG: подраздел `### Ломает` в конце версии с несовместимой правкой API, у прошлых — задним числом.
 
 ## v0.6.1
 
@@ -80,14 +80,10 @@
 
 Маршруты задач: смена плеча — правка файла и рестарт, без запасного плеча.
 
-Ломает:
-
-- `Provider.AttemptOverhead` — новый обязательный метод: своё плечо потребителя без него не собирается.
-
 - `Router`, `Route`, `Descriptor`: задача разрешается в неизменяемый маршрут; `Validate` сверяет задачи
   потребителя с профилями плеч до вызова (`nil` — без требований, пустая карта — задач не нужно).
-- `Provider.AttemptOverhead` — обязательный метод контракта: `Route.Budget` включает уборку плеча
-  (у `gigachat` — `CleanupBudget`) на попытку и через обёртку потребителя.
+- `Route.Budget` включает уборку плеча (у `gigachat` — `CleanupBudget`) на попытку и через обёртку
+  потребителя.
 - `ConfigError` и непроверенный сертификат поставщика — класс `needs_configuration`, исход `config`,
   известный нулевой расход; пустой ключ Яндекса больше не повторяется.
 - `Capabilities.SchemaName`: схема без имени отбивается профилем (`yandex`), а не адаптером в рантайме.
@@ -99,20 +95,14 @@
   типом и значением поля, у схемы — без лишних полей; отказ печатается классом, исходом и кодом, без
   текста поставщика; `-tasks` сужает набор до чтения секретов; перелёт `-max-cost` — выход 3.
 
+### Ломает
+
+- `Provider.AttemptOverhead` — новый обязательный метод: своё плечо потребителя без него не собирается.
+
 ## v0.3.0
 
 Платные плечи: без нормализованного расхода, причины конца генерации и отчётов попыток
 вызов нельзя ни повторять, ни оплачивать.
-
-Ломает:
-
-- `Request.Temperature` → `Request.Options.Temperature`.
-- `Usage.InputTokens`, `Usage.OutputTokens`: поля → методы; поля теперь — непересекающиеся части
-  `BillableInput`, `CachedInput`, `Output`, `Reasoning`.
-- `Result.FinishReason` → `Result.Finish` (`Finish.Raw`, `Finish.Kind`).
-- `CallError.Attempts`: `int` → `[]AttemptReport`.
-- `Provider.Capabilities` — новый обязательный метод.
-- `Result`, `Usage`, `CallError`, `CallReport`, `AttemptReport`, `ResponseError` больше не сравниваются `==`.
 
 - `gigachat`: OAuth со слиянием обновлений и одним повтором на 401, транспорт с CA Минцифры,
   кадры через `/files` с уборкой после попытки (`CleanupWarning`), `chat/completions` со схемой,
@@ -127,10 +117,20 @@
   расходом и уборкой (`CleanupWarning.Uncertain`) в `Result.Attempts` и `CallError.Attempts`.
 - Известный нулевой расход — только у отказа до генерации: вход, загрузка кадров, 4xx кроме 408.
 
+### Ломает
+
+- `Request.Temperature` → `Request.Options.Temperature`.
+- `Usage.InputTokens`, `Usage.OutputTokens`: поля → методы; поля теперь — непересекающиеся части
+  `BillableInput`, `CachedInput`, `Output`, `Reasoning`.
+- `Result.FinishReason` → `Result.Finish` (`Finish.Raw`, `Finish.Kind`).
+- `CallError.Attempts`: `int` → `[]AttemptReport`.
+- `Provider.Capabilities` — новый обязательный метод.
+- `Result`, `Usage`, `CallError`, `CallReport`, `AttemptReport`, `ResponseError` больше не сравниваются `==`.
+
 ## v0.2.0
 
 Контракт, клиент с повторами и классами отказа, наблюдатель, плечо `ollama`. v0.1.0 не использовать.
 
-Ломает:
+### Ломает
 
 - `Result.Attempts` → `Result.Report.Attempts`.
