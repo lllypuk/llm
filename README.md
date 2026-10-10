@@ -86,7 +86,7 @@ res, err := route.Chat(ctx, llm.Input{CallID: id, Messages: msgs, Mode: llm.Mode
 ### Сборка из конфига
 
 `llmbuild.Router` собирает плечи `Config.Active()` и задачи чата, речи и OCR; конфиг — развёрнутый
-(`Load` или `Expand`), иначе секреты плеч пусты.
+(`Load` или `Expand`): неразвёрнутый ключ плеча — ошибка сборки, а не отказ на первом вызове.
 
 ```go
 router, err := llmbuild.Router(*cfg, llmbuild.Options{})

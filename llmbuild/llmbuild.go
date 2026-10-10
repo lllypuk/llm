@@ -35,8 +35,12 @@ type Built struct {
 	OCR      llm.Recognizer
 }
 
-// Arm собирает плечо name без сети; секреты p уже развёрнуты.
+// Arm собирает плечо name без сети; неразвёрнутый секрет p — отказ.
 func Arm(name string, p llmconfig.Provider, o Options) (Built, error) {
+	if err := expanded(p); err != nil {
+		return Built{}, err
+	}
+
 	pool, err := roots(name, p, o)
 	if err != nil {
 		return Built{}, err
@@ -100,6 +104,32 @@ func Arm(name string, p llmconfig.Provider, o Options) (Built, error) {
 		return Built{OCR: rec}, nil
 	default:
 		return Built{}, fmt.Errorf("неизвестный вид плеча %q", p.Kind)
+	}
+}
+
+// expanded — ключ плеча развёрнут: пустой ключ Яндекса адаптер принимает и отказывает лишь на вызове.
+func expanded(p llmconfig.Provider) error {
+	var (
+		field string
+		key   llmconfig.Secret
+	)
+
+	switch p.Kind {
+	case llmconfig.KindGigaChat, llmconfig.KindSaluteSpeech:
+		field, key = "auth.authorization_key", p.Auth.AuthorizationKey
+	case llmconfig.KindYandex, llmconfig.KindSpeechKit, llmconfig.KindVisionOCR:
+		field, key = "auth.api_key", p.Auth.APIKey
+	default:
+		return nil
+	}
+
+	switch {
+	case key.Value() != "":
+		return nil
+	case key.IsZero():
+		return fmt.Errorf("%s: ключ не задан у плеча %s", field, p.Kind)
+	default:
+		return fmt.Errorf("%s: %s не развёрнут у плеча %s — конфиг без Expand", field, key, p.Kind)
 	}
 }
 

@@ -254,3 +254,35 @@ func selfSigned(t *testing.T) []byte {
 
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
+
+func TestArmRefusesUnexpanded(t *testing.T) {
+	cfg, err := llmconfig.Parse([]byte(allKinds))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := map[string]string{
+		"giga":   "auth.authorization_key",
+		"salute": "auth.authorization_key",
+		"yc":     "auth.api_key",
+		"stt":    "auth.api_key",
+		"vision": "auth.api_key",
+	}
+
+	for arm, field := range cases {
+		_, armErr := llmbuild.Arm(arm, cfg.Providers[arm], llmbuild.Options{})
+		if armErr == nil || !strings.Contains(armErr.Error(), field+": ${KEY} не развёрнут") {
+			t.Errorf("%s: ошибка %v, ждали неразвёрнутый %s", arm, armErr, field)
+		}
+	}
+
+	if _, err = llmbuild.Arm("local", cfg.Providers["local"], llmbuild.Options{}); err != nil {
+		t.Fatalf("ollama без секрета: %v", err)
+	}
+
+	bare := llmconfig.Provider{Kind: llmconfig.KindYandex, Endpoint: "https://yc.invalid", Folder: "b1g"}
+	_, err = llmbuild.Arm("yc", bare, llmbuild.Options{})
+	if err == nil || !strings.Contains(err.Error(), "auth.api_key: ключ не задан") {
+		t.Fatalf("ошибка %v, ждали незаданный ключ", err)
+	}
+}

@@ -79,3 +79,25 @@ func TestRouterJoinsArmErrors(t *testing.T) {
 		t.Fatalf("ошибка %q: нужны обе, local раньше yc", msg)
 	}
 }
+
+func TestRouterRefusesUnexpanded(t *testing.T) {
+	cfg, err := llmconfig.Parse([]byte(allKinds))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := llmbuild.Router(*cfg, llmbuild.Options{})
+	if err == nil {
+		t.Fatalf("ошибки нет, роутер %v", r)
+	}
+
+	for _, arm := range []string{"giga", "salute", "yc", "stt", "vision"} {
+		if !strings.Contains(err.Error(), "providers."+arm+": ") {
+			t.Errorf("нет плеча %s в %q", arm, err)
+		}
+	}
+
+	if strings.Contains(err.Error(), "providers.local") {
+		t.Errorf("ollama в ошибке: %q", err)
+	}
+}
