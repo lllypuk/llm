@@ -111,7 +111,7 @@ func TestNewRequest(t *testing.T) {
 
 	body, _ := io.ReadAll(req.Body)
 	if req.Method != http.MethodPost || string(body) != `{"a":1}` ||
-		req.Header.Get("Content-Type") != "application/json" || req.Header.Get("X-Request-Id") != "r1" {
+		req.Header.Get("Content-Type") != "application/json" || req.Header.Get("X-Request-ID") != "r1" {
 		t.Errorf("запрос %s %q %v", req.Method, body, req.Header)
 	}
 

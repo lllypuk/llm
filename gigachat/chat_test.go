@@ -46,7 +46,7 @@ func (s *chatServer) serve(t *testing.T) func(w http.ResponseWriter, r *http.Req
 		s.mu.Unlock()
 
 		status, body := s.reply(n)
-		w.Header().Set("X-Request-Id", "req-"+strconv.Itoa(n))
+		w.Header().Set("X-Request-ID", "req-"+strconv.Itoa(n))
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, body)
 	}

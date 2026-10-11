@@ -90,7 +90,7 @@ func (s *Source) Do(
 				Message:    st.Message,
 				RetryAfter: st.RetryAfter,
 				Phase:      llm.PhaseAuth,
-				RequestID:  resp.Header.Get("X-Request-Id"),
+				RequestID:  resp.Header.Get("X-Request-ID"),
 			}
 		}
 

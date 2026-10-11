@@ -194,7 +194,7 @@ func (p *Provider) upload(ctx context.Context, img llm.Image, name string) (stri
 
 	defer func() { _ = resp.Body.Close() }()
 
-	requestID := resp.Header.Get("X-Request-Id")
+	requestID := resp.Header.Get("X-Request-ID")
 
 	if resp.StatusCode != http.StatusOK {
 		st := httpjson.ReadStatus(resp, maxErrorBody, sberauth.ErrorMessage)
@@ -307,7 +307,7 @@ func (p *Provider) remove(ctx context.Context, id string) error {
 	if resp.StatusCode != http.StatusOK {
 		st := httpjson.ReadStatus(resp, maxErrorBody, sberauth.ErrorMessage)
 
-		return &llm.StatusError{Status: st.Code, Message: st.Message, RequestID: resp.Header.Get("X-Request-Id")}
+		return &llm.StatusError{Status: st.Code, Message: st.Message, RequestID: resp.Header.Get("X-Request-ID")}
 	}
 
 	var out struct {

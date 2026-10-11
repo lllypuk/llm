@@ -83,7 +83,7 @@ func (f *files) upload(t *testing.T, w http.ResponseWriter, r *http.Request) {
 
 	n := len(f.uploads)
 	if n == f.failNth {
-		w.Header().Set("X-Request-Id", "req-fail")
+		w.Header().Set("X-Request-ID", "req-fail")
 		w.WriteHeader(cmp.Or(f.failCode, http.StatusInternalServerError))
 		_, _ = w.Write([]byte(`{"message":"storage"}`))
 

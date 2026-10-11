@@ -41,7 +41,7 @@ func (s *sttServer) start(t *testing.T) string {
 			w.Header()[k] = v
 		}
 
-		w.Header().Set("X-Request-Id", "stt-1")
+		w.Header().Set("X-Request-ID", "stt-1")
 		w.WriteHeader(s.status)
 		_, _ = io.WriteString(w, s.body)
 	}))
