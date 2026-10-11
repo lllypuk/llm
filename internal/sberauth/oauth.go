@@ -69,7 +69,7 @@ func (o *oauth) fetch(ctx context.Context) (*Token, error) {
 
 	defer func() { _ = resp.Body.Close() }()
 
-	requestID := resp.Header.Get("X-Request-Id")
+	requestID := resp.Header.Get("X-Request-ID")
 
 	if resp.StatusCode != http.StatusOK {
 		st := httpjson.ReadStatus(resp, MaxErrorBody, ErrorMessage)

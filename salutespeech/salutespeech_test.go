@@ -80,7 +80,7 @@ func (s *sber) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		w.Header().Set("X-Request-Id", "rq-1")
+		w.Header().Set("X-Request-ID", "rq-1")
 		_, _ = io.WriteString(w, `{"result":["включи котёл"," на двадцать ",""],"emotions":[],"status":200}`)
 	case "/api/chat/completions":
 		s.mu.Lock()
@@ -345,7 +345,7 @@ func TestStatusErrors(t *testing.T) {
 
 	for _, code := range []int{http.StatusBadRequest, http.StatusTooManyRequests, http.StatusServiceUnavailable} {
 		s := &sber{recognize: func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("X-Request-Id", "rq-err")
+			w.Header().Set("X-Request-ID", "rq-err")
 			w.Header().Set("Retry-After", "3")
 			w.WriteHeader(code)
 			_, _ = io.WriteString(w, `{"status":`+strconv.Itoa(code)+`,"message":"отказ"}`)

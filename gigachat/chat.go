@@ -170,7 +170,7 @@ func (p *Provider) chat(ctx context.Context, body chatRequest) (llm.Result, erro
 
 	defer func() { _ = resp.Body.Close() }()
 
-	requestID := resp.Header.Get("X-Request-Id")
+	requestID := resp.Header.Get("X-Request-ID")
 
 	if resp.StatusCode != http.StatusOK {
 		st := httpjson.ReadStatus(resp, maxErrorBody, sberauth.ErrorMessage)

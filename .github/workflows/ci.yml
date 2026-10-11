@@ -11,15 +11,20 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # Нижняя граница — строка go в go.mod, верхняя — актуальный релиз.
+        go: ['1.26', '1.27']
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version: ${{ matrix.go }}
       - run: go vet ./...
       - run: go test -race ./...
       - run: go test -race -tags live ./cmd/llmcheck
-      - uses: golangci/golangci-lint-action@v9
+      - if: matrix.go == '1.27'
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.12.2
+          version: v2.14.0
           args: --build-tags=live

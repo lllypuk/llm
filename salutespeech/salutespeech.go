@@ -126,7 +126,7 @@ func (p *Provider) Transcribe(ctx context.Context, req llm.SpeechRequest) (llm.T
 
 	defer func() { _ = resp.Body.Close() }()
 
-	requestID := resp.Header.Get("X-Request-Id")
+	requestID := resp.Header.Get("X-Request-ID")
 
 	if resp.StatusCode != http.StatusOK {
 		st := httpjson.ReadStatus(resp, sberauth.MaxErrorBody, sberauth.ErrorMessage)

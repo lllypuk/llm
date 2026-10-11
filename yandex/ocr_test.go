@@ -43,7 +43,7 @@ func (s *ocrServer) start(t *testing.T) string {
 			w.Header()[k] = v
 		}
 
-		w.Header().Set("X-Request-Id", "ocr-1")
+		w.Header().Set("X-Request-ID", "ocr-1")
 		w.WriteHeader(s.status)
 		_, _ = io.WriteString(w, s.body)
 	}))

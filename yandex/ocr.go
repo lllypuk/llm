@@ -129,7 +129,7 @@ func (o *OCR) Recognize(ctx context.Context, req llm.OCRRequest) (llm.OCRText, e
 
 	defer func() { _ = resp.Body.Close() }()
 
-	requestID := resp.Header.Get("X-Request-Id")
+	requestID := resp.Header.Get("X-Request-ID")
 
 	if resp.StatusCode != http.StatusOK {
 		st := httpjson.ReadStatus(resp, maxErrorBody, ocrErrorMessage)
