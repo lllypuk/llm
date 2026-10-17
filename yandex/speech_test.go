@@ -115,6 +115,10 @@ func TestSpeechExactRequestAndResult(t *testing.T) {
 		t.Errorf("Content-Type %q", ct)
 	}
 
+	if l := r.Header.Get("X-Data-Logging-Enabled"); l != "false" {
+		t.Errorf("X-Data-Logging-Enabled %q", l)
+	}
+
 	if !bytes.Equal(s.pcm[0], audio) {
 		t.Error("тело не совпало с PCM")
 	}

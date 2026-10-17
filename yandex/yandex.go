@@ -279,8 +279,9 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (llm.Result, e
 	}
 
 	header := http.Header{
-		"Authorization":  {scheme + " " + value},
-		"OpenAI-Project": {p.folder},
+		"Authorization":          {scheme + " " + value},
+		"OpenAI-Project":         {p.folder},
+		"X-Data-Logging-Enabled": {"false"},
 	}
 
 	httpReq, err := httpjson.NewRequest(ctx, p.endpoint+"/chat/completions", body, header)
