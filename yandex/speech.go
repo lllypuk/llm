@@ -115,6 +115,7 @@ func (s *Speech) Transcribe(ctx context.Context, req llm.SpeechRequest) (llm.Tra
 	}
 
 	httpReq.Header.Set("Authorization", scheme+" "+value)
+	httpReq.Header.Set("X-Data-Logging-Enabled", "false")
 	httpReq.Header.Set("Content-Type", "application/octet-stream")
 	httpReq.Header.Set("Accept", "application/json")
 

@@ -26,6 +26,7 @@ type server struct {
 	bodies  []string
 	auth    []string
 	project []string
+	logging []string
 }
 
 func (s *server) start(t *testing.T) string {
@@ -44,6 +45,7 @@ func (s *server) start(t *testing.T) string {
 		s.bodies = append(s.bodies, string(raw))
 		s.auth = append(s.auth, r.Header.Get("Authorization"))
 		s.project = append(s.project, r.Header.Get("Openai-Project"))
+		s.logging = append(s.logging, r.Header.Get("X-Data-Logging-Enabled"))
 		n := len(s.bodies)
 		s.mu.Unlock()
 
@@ -150,8 +152,8 @@ func TestChatExactRequestAndResult(t *testing.T) {
 		t.Errorf("запросы %q", got)
 	}
 
-	if s.auth[0] != "Api-Key key-1" || s.project[0] != "b1g" {
-		t.Errorf("подпись %q, каталог %q", s.auth[0], s.project[0])
+	if s.auth[0] != "Api-Key key-1" || s.project[0] != "b1g" || s.logging[0] != "false" {
+		t.Errorf("подпись %q, каталог %q, логирование %q", s.auth[0], s.project[0], s.logging[0])
 	}
 
 	if res.Text != `{"brand":"Bosch"}` || res.Model != "gpt://b1g/qwen3.6-35b-a3b/latest" || res.RequestID != "req-1" ||

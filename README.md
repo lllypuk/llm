@@ -155,8 +155,8 @@ res, err := route.Recognize(ctx, llm.OCRInput{CallID: id, Image: jpeg, MIME: llm
 
 - Раздел `ocr` необязателен: без него `ResolveOCR` даёт `false` без ошибки. `languages` обязательны;
   плечо `visionocr` годится только задачам OCR, чатовое и речевое у задачи OCR — ошибка разбора.
-- `yandex.NewOCR` шлёт `x-data-logging-enabled: false` всегда: в кадрах чеки и документы людей,
-  логирование у Яндекса выключено без настройки.
+- `yandex.NewOCR`, как и чат и речь Яндекса, шлёт `x-data-logging-enabled: false` всегда: в кадрах
+  чеки и документы людей, логирование у Яндекса выключено без настройки.
 - Кадр больше `OCRCapabilities.MaxBytes` (у `page` — 10 МБ) отбивается до сети классом `never`.
 - Расход — страницы: `Pages` в отчётах, тариф `page` за страницу. Страница идёт в расход по тому же
   правилу, что запись у речи. `OCRDescriptor.Fingerprint` — вид плеча, модель и языки, без имени плеча и тарифа.
