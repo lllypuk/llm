@@ -20,6 +20,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: ${{ matrix.go }}
+          check-latest: true
       - run: go vet ./...
       - run: go test -race ./...
       - run: go test -race -tags live ./cmd/llmcheck
