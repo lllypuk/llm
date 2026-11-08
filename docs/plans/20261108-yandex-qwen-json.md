@@ -57,12 +57,12 @@ DPP и family-money переезжают на Yandex AI Studio. Единстве
 
 **Files:** `README.md`, `CHANGELOG.md`
 
-- [ ] README, «Что делает клиент», рядом с пунктом про Ollama: у `qwen3.6-35b-a3b` ModeJSON уходит
+- [x] README, «Что делает клиент», рядом с пунктом про Ollama: у `qwen3.6-35b-a3b` ModeJSON уходит
       без `response_format`. `JSON: true` у этой модели значит «форму держит промпт», а не протокол,
       в отличие от GigaChat с `JSON: false`. Разбор у потребителя должен быть защитным.
-- [ ] CHANGELOG: секция `## v0.7.3` «Исправление без изменения API.» с пунктом о qwen3.6 и цифрами
+- [x] CHANGELOG: секция `## v0.7.3` «Исправление без изменения API.» с пунктом о qwen3.6 и цифрами
       замера (3/12 → 11/12)
-- [ ] проверки Development Approach — зелёные
+- [x] проверки Development Approach — зелёные
 
 ## Post-Completion
 
