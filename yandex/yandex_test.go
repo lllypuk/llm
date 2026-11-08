@@ -210,6 +210,40 @@ func TestIAMRefreshedBetweenAttempts(t *testing.T) {
 	}
 }
 
+// TestJSONModeFormat — ModeJSON у qwen3.6 уходит без response_format, у остальных моделей — json_object.
+func TestJSONModeFormat(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"qwen3.6-35b-a3b":        "",
+		"qwen3.6-35b-a3b/latest": "",
+		"yandexgpt/latest":       `,"response_format":{"type":"json_object"}`,
+	}
+
+	for model, format := range cases {
+		t.Run(model, func(t *testing.T) {
+			t.Parallel()
+
+			s := &server{reply: always(http.StatusOK, reply("stop", `{}`))}
+
+			_, err := client(t, s, yandex.APIKey("k")).Chat(context.Background(), llm.Request{
+				Model:    model,
+				Messages: []llm.Message{{Role: llm.RoleUser, Text: "вопрос"}},
+				Output:   llm.Output{Mode: llm.ModeJSON},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			want := `{"model":"gpt://b1g/` + model + `","messages":[{"role":"user","content":"вопрос"}],"stream":false` +
+				format + `}`
+			if got := s.requests(); len(got) != 1 || got[0] != want {
+				t.Errorf("запросы %q", got)
+			}
+		})
+	}
+}
+
 // TestTerminalFinishNotRetried — обрезанный и отфильтрованный ответ оплачен: один запрос, класс never,
 // расход и finish в отчёте — и с содержимым, и без него.
 func TestTerminalFinishNotRetried(t *testing.T) {
