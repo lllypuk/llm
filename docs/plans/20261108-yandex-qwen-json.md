@@ -46,12 +46,12 @@ DPP и family-money переезжают на Yandex AI Studio. Единстве
 
 **Files:** `yandex/yandex.go`, `yandex/yandex_test.go`
 
-- [ ] в `encode`, ветка `llm.ModeJSON`: для модели, имя которой без версии равно `qwen3.6-35b-a3b`,
+- [x] в `encode`, ветка `llm.ModeJSON`: для модели, имя которой без версии равно `qwen3.6-35b-a3b`,
       `ResponseFormat` не ставить; для остальных моделей — как раньше
-- [ ] комментарий одной строкой внутри `case llm.ModeJSON`, без новых объявлений: у qwen форму
+- [x] комментарий одной строкой внутри `case llm.ModeJSON`, без новых объявлений: у qwen форму
       держит промпт, потому что `json_object` даёт мусор; подробности в README
-- [ ] тесты из Development Approach — табличные, в стиле файла
-- [ ] проверки Development Approach — зелёные
+- [x] тесты из Development Approach — табличные, в стиле файла
+- [x] проверки Development Approach — зелёные
 
 ### Task 2: [Final] README, CHANGELOG
 

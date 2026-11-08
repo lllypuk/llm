@@ -357,7 +357,10 @@ func (p *Provider) encode(req llm.Request) (chatRequest, error) {
 
 	switch req.Output.Mode {
 	case llm.ModeJSON:
-		out.ResponseFormat = &responseFormat{Type: "json_object"}
+		// У qwen3.6 json_object даёт мусор вместо ответа, форму держит промпт (README).
+		if name, _, _ := strings.Cut(req.Model, "/"); name != "qwen3.6-35b-a3b" {
+			out.ResponseFormat = &responseFormat{Type: "json_object"}
+		}
 	case llm.ModeSchema:
 		if req.Output.Name == "" {
 			return chatRequest{}, &llm.RequestError{Message: "режим schema без имени схемы"}
