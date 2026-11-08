@@ -47,16 +47,16 @@ DPP переводит распознавание шильдиков с `qwen3.6
 
 **Files:** `yandex/yandex.go`, `yandex/yandex_test.go`
 
-- [ ] в `Capabilities` новая ветка `case "deepseek-v4.1-flash"` с `caps.Vision = true`; док-комментарий
+- [x] в `Capabilities` новая ветка `case "deepseek-v4.1-flash"` с `caps.Vision = true`; док-комментарий
       над функцией поправить: кадры у qwen3.6 и deepseek
-- [ ] новый табличный `TestCapabilities` в `yandex/yandex_test.go` (теста профилей там нет): `qwen3.6-35b-a3b` —
+- [x] новый табличный `TestCapabilities` в `yandex/yandex_test.go` (теста профилей там нет): `qwen3.6-35b-a3b` —
       `Vision`; `deepseek-v4.1-flash` и `deepseek-v4.1-flash/latest` — `Vision`, `JSON`, `MaxOutputTokens`, без
       `Reasoning`; `yandexgpt` — без `Vision`; `gpt-oss-120b` — `Reasoning`; неизвестная (`deepseek-v9`) — `ok == false`
-- [ ] `TestJSONModeFormat`: строки `deepseek-v4.1-flash` и `deepseek-v4.1-flash/latest` с `json_object`; заголовок теста
+- [x] `TestJSONModeFormat`: строки `deepseek-v4.1-flash` и `deepseek-v4.1-flash/latest` с `json_object`; заголовок теста
       поправить под «qwen3.6 без, остальные с»
-- [ ] отдельный кейс рядом с `TestChatExactRequestAndResult`: запрос `deepseek-v4.1-flash/latest` с кадром и ModeJSON —
+- [x] отдельный кейс рядом с `TestChatExactRequestAndResult`: запрос `deepseek-v4.1-flash/latest` с кадром и ModeJSON —
       в теле `image_url` и `response_format` `json_object`
-- [ ] проверки Development Approach — зелёные
+- [x] проверки Development Approach — зелёные
 
 ### Task 2: [Final] README, CHANGELOG
 

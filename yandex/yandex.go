@@ -75,7 +75,8 @@ func (p *Provider) Name() string { return Name }
 func (p *Provider) AttemptOverhead() time.Duration { return 0 }
 
 // Capabilities — профиль по имени модели без версии (`yandexgpt/rc` — `yandexgpt`). Рассуждения — только
-// у открытых reasoning-моделей, кадры — только у qwen3.6-35b-a3b; неизвестная модель не подтверждает ничего.
+// у открытых reasoning-моделей, кадры — у qwen3.6-35b-a3b и deepseek-v4.1-flash; неизвестная модель не
+// подтверждает ничего.
 func (p *Provider) Capabilities(model string) (llm.Capabilities, bool) {
 	name, _, _ := strings.Cut(model, "/")
 
@@ -92,7 +93,7 @@ func (p *Provider) Capabilities(model string) (llm.Capabilities, bool) {
 	case "yandexgpt", "yandexgpt-lite":
 	case "gpt-oss-120b", "gpt-oss-20b", "qwen3-235b-a22b-fp8":
 		caps.Reasoning = true
-	case "qwen3.6-35b-a3b":
+	case "qwen3.6-35b-a3b", "deepseek-v4.1-flash":
 		caps.Vision = true
 	default:
 		return llm.Capabilities{}, false

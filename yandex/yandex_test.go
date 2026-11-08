@@ -166,6 +166,66 @@ func TestChatExactRequestAndResult(t *testing.T) {
 	}
 }
 
+// TestDeepSeekImageJSON — deepseek принимает кадр, ModeJSON уходит с json_object.
+func TestDeepSeekImageJSON(t *testing.T) {
+	t.Parallel()
+
+	s := &server{reply: always(http.StatusOK, reply("stop", `{}`))}
+
+	_, err := client(t, s, yandex.APIKey("k")).Chat(context.Background(), llm.Request{
+		Model: "deepseek-v4.1-flash/latest",
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Text: "шильдик", Images: []llm.Image{{MIME: "image/jpeg", Data: []byte("ab")}}},
+		},
+		Output: llm.Output{Mode: llm.ModeJSON},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := `{"model":"gpt://b1g/deepseek-v4.1-flash/latest","messages":[{"role":"user","content":[` +
+		`{"type":"text","text":"шильдик"},{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,YWI="}}]}],` +
+		`"stream":false,"response_format":{"type":"json_object"}}`
+	if got := s.requests(); len(got) != 1 || got[0] != want {
+		t.Errorf("запросы %q", got)
+	}
+}
+
+// TestCapabilities — профиль по имени без версии; неизвестная модель не подтверждает ничего.
+func TestCapabilities(t *testing.T) {
+	t.Parallel()
+
+	p, err := yandex.New(yandex.Config{Endpoint: "http://127.0.0.1", Folder: "b1g", Credentials: yandex.APIKey("k")})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base := llm.Capabilities{
+		JSON: true, Schema: true, Strict: true, SchemaName: true, Temperature: true, MaxOutputTokens: true,
+	}
+	vision, reasoning := base, base
+	vision.Vision = true
+	reasoning.Reasoning = true
+
+	cases := map[string]struct {
+		caps llm.Capabilities
+		ok   bool
+	}{
+		"qwen3.6-35b-a3b":            {vision, true},
+		"deepseek-v4.1-flash":        {vision, true},
+		"deepseek-v4.1-flash/latest": {vision, true},
+		"yandexgpt":                  {base, true},
+		"gpt-oss-120b":               {reasoning, true},
+		"deepseek-v9":                {llm.Capabilities{}, false},
+	}
+
+	for model, want := range cases {
+		if caps, ok := p.Capabilities(model); caps != want.caps || ok != want.ok {
+			t.Errorf("%s: профиль %+v, %v", model, caps, ok)
+		}
+	}
+}
+
 // TestIAMRefreshedBetweenAttempts — подпись спрашивается каждой попыткой: повтор после 5xx идёт с токеном,
 // обновлённым снаружи; json_object и reasoning_effort у reasoning-модели.
 func TestIAMRefreshedBetweenAttempts(t *testing.T) {
@@ -210,14 +270,16 @@ func TestIAMRefreshedBetweenAttempts(t *testing.T) {
 	}
 }
 
-// TestJSONModeFormat — ModeJSON у qwen3.6 уходит без response_format, у остальных моделей — json_object.
+// TestJSONModeFormat — ModeJSON у qwen3.6 уходит без response_format, у остальных моделей — с json_object.
 func TestJSONModeFormat(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]string{
-		"qwen3.6-35b-a3b":        "",
-		"qwen3.6-35b-a3b/latest": "",
-		"yandexgpt/latest":       `,"response_format":{"type":"json_object"}`,
+		"qwen3.6-35b-a3b":            "",
+		"qwen3.6-35b-a3b/latest":     "",
+		"yandexgpt/latest":           `,"response_format":{"type":"json_object"}`,
+		"deepseek-v4.1-flash":        `,"response_format":{"type":"json_object"}`,
+		"deepseek-v4.1-flash/latest": `,"response_format":{"type":"json_object"}`,
 	}
 
 	for model, format := range cases {
