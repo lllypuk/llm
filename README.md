@@ -54,6 +54,8 @@ res, err := c.Chat(ctx, llm.Request{
 - **Яндекс, `qwen3.6-35b-a3b`**: json уходит без `response_format` — с `json_object` модель выдаёт
   мусор вместо ответа. `JSON: true` у неё значит «форму держит промпт», а не протокол (у GigaChat
   json протоколом не выражается — `JSON: false`). Разбор у потребителя обязан быть защитным.
+- **Яндекс, кадры** принимают `qwen3.6-35b-a3b` и `deepseek-v4.1-flash`; у deepseek json уходит с
+  `json_object`, как у `yandexgpt*`, — исключение только qwen3.6.
 
 ## Маршруты задач
 

@@ -13,8 +13,8 @@ go vet ./...
 go test -race ./...                          # включает TestLiveBuild: вложенный go test -tags live без сети
 go test -race -tags live ./cmd/llmcheck      # тесты llmcheck напрямую
 go test -race -run TestName ./gigachat       # один тест
-golangci-lint run --build-tags=live          # v2.12.2, как в CI; локально может не стоять:
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --build-tags=live
+golangci-lint run --build-tags=live          # v2.14.0, как в CI; локально может не стоять:
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run --build-tags=live
 ```
 
 Без `--build-tags=live` линтер не видит `cmd/llmcheck` — код команды под тегом `live`.
